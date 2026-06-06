@@ -11,9 +11,14 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { router } from 'expo-router';
+import { Feather } from '@expo/vector-icons';
 import { useAuth } from '../../src/hooks/useAuth';
+import { useArtists } from '../../src/hooks/useArtists';
 import { CityChip } from '../../src/components/CityChip';
-import { connectSpotify } from '../../src/lib/spotify';
+import { useSpotifyAuth, exchangeSpotifyCode, getLibraryArtists } from '../../src/lib/spotify';
+import { geocodeCity } from '../../src/lib/geocode';
+import { sendTestNotification } from '../../src/lib/notifications';
 import { HomeCity } from '../../src/types';
 
 const COLORS = {
@@ -54,9 +59,9 @@ function SettingsRow({
 }
 
 export default function SettingsScreen() {
-  const { user, profile, updateProfile, signOut } = useAuth();
+  const { user, profile, updateProfile } = useAuth();
+  const { importArtists } = useArtists();
   const [cityInput, setCityInput] = useState('');
-  const [signingOut, setSigningOut] = useState(false);
   const [connectingSpotify, setConnectingSpotify] = useState(false);
 
   const homeCities: HomeCity[] = profile?.home_cities ?? [];
@@ -65,16 +70,20 @@ export default function SettingsScreen() {
   const notifyWeek = profile?.notify_week_before ?? true;
   const notifyDay = profile?.notify_day_before ?? true;
 
-  const addCity = () => {
+  const [addingCity, setAddingCity] = useState(false);
+
+  const addCity = async () => {
     const trimmed = cityInput.trim();
     if (!trimmed) return;
     if (homeCities.length >= 3) {
       Alert.alert('Limit reached', 'You can add up to 3 home cities.');
       return;
     }
-    const newCity: HomeCity = { city: trimmed, state: '', country: 'US', lat: 0, lng: 0 };
-    updateProfile({ home_cities: [...homeCities, newCity] });
+    setAddingCity(true);
     setCityInput('');
+    const newCity = await geocodeCity(trimmed);
+    await updateProfile({ home_cities: [...homeCities, newCity] });
+    setAddingCity(false);
   };
 
   const removeCity = (index: number) => {
@@ -82,30 +91,62 @@ export default function SettingsScreen() {
     updateProfile({ home_cities: updated });
   };
 
+  const { request, response, promptAsync } = useSpotifyAuth();
+
+  React.useEffect(() => {
+    if (response?.type === 'success') {
+      const code = (response as any).params?.code;
+      const codeVerifier = request?.codeVerifier;
+      if (code && codeVerifier) {
+        exchangeSpotifyCode(code, codeVerifier).then(async (token) => {
+          if (!token) {
+            setConnectingSpotify(false);
+            Alert.alert('Error', 'Could not connect to Spotify.');
+            return;
+          }
+          await updateProfile({ spotify_token: token });
+          // Pull the user's library and populate their artists.
+          try {
+            const library = await getLibraryArtists(token);
+            const count = await importArtists(library, 'spotify');
+            Alert.alert(
+              'Spotify connected',
+              count > 0
+                ? `Imported ${count} artist${count === 1 ? '' : 's'} from your Spotify library.`
+                : 'Connected, but we couldn’t find any artists to import.'
+            );
+          } catch (e) {
+            console.error('Spotify import error:', e);
+            Alert.alert('Connected', 'Spotify connected, but importing artists failed.');
+          }
+          setConnectingSpotify(false);
+        });
+      } else {
+        setConnectingSpotify(false);
+      }
+    } else if (response?.type === 'error' || response?.type === 'dismiss') {
+      setConnectingSpotify(false);
+    }
+  }, [response]);
+
   const handleConnectSpotify = async () => {
     setConnectingSpotify(true);
-    const token = await connectSpotify();
-    setConnectingSpotify(false);
-    if (token) {
-      await updateProfile({ spotify_token: token });
-      Alert.alert('Connected', 'Spotify connected successfully.');
-    } else {
-      Alert.alert('Error', 'Could not connect to Spotify.');
-    }
+    await promptAsync();
   };
 
-  const handleSignOut = async () => {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign Out',
-        style: 'destructive',
-        onPress: async () => {
-          setSigningOut(true);
-          await signOut();
+  const handleDisconnectSpotify = () => {
+    Alert.alert(
+      'Disconnect Spotify',
+      'Your imported artists will stay, but we’ll stop syncing from Spotify.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Disconnect',
+          style: 'destructive',
+          onPress: () => updateProfile({ spotify_token: null }),
         },
-      },
-    ]);
+      ]
+    );
   };
 
   return (
@@ -132,8 +173,12 @@ export default function SettingsScreen() {
                 returnKeyType="done"
                 onSubmitEditing={addCity}
               />
-              <TouchableOpacity style={styles.addCityBtn} onPress={addCity}>
-                <Text style={styles.addCityBtnText}>Add</Text>
+              <TouchableOpacity style={styles.addCityBtn} onPress={addCity} disabled={addingCity}>
+                {addingCity ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={styles.addCityBtnText}>Add</Text>
+                )}
               </TouchableOpacity>
             </View>
           )}
@@ -161,12 +206,14 @@ export default function SettingsScreen() {
           <SettingsRow
             label="Spotify"
             right={
-              profile?.spotify_token ? (
-                <Text style={[styles.badge, styles.badgeGreen]}>Connected</Text>
-              ) : connectingSpotify ? (
+              connectingSpotify ? (
                 <ActivityIndicator color={COLORS.accent} size="small" />
+              ) : profile?.spotify_token ? (
+                <TouchableOpacity style={styles.disconnectBtn} onPress={handleDisconnectSpotify}>
+                  <Text style={styles.disconnectBtnText}>Disconnect</Text>
+                </TouchableOpacity>
               ) : (
-                <TouchableOpacity style={styles.connectBtn} onPress={handleConnectSpotify}>
+                <TouchableOpacity style={[styles.connectBtn, styles.spotifyBtn]} onPress={handleConnectSpotify}>
                   <Text style={styles.connectBtnText}>Connect</Text>
                 </TouchableOpacity>
               )
@@ -180,7 +227,7 @@ export default function SettingsScreen() {
                 <Text style={[styles.badge, styles.badgeRed]}>Connected</Text>
               ) : (
                 <TouchableOpacity
-                  style={styles.connectBtn}
+                  style={[styles.connectBtn, styles.appleBtn]}
                   onPress={() => Alert.alert('Coming soon', 'Apple Music integration coming soon.')}
                 >
                   <Text style={styles.connectBtnText}>Connect</Text>
@@ -228,27 +275,37 @@ export default function SettingsScreen() {
               />
             }
           />
+          <View style={styles.separator} />
+          <SettingsRow
+            label="Send a test notification"
+            onPress={async () => {
+              const ok = await sendTestNotification();
+              Alert.alert(
+                ok ? 'Test sent' : 'Permission needed',
+                ok
+                  ? 'You should get a notification in a couple seconds. Background the app to see the banner.'
+                  : 'Enable notifications for Encore in your device settings first.'
+              );
+            }}
+            right={<Text style={styles.testLink}>Send</Text>}
+          />
         </View>
 
         {/* Account */}
         <SectionHeader title="Account" />
         <View style={styles.section}>
           <SettingsRow
-            label="Email"
+            label="Manage account"
+            onPress={() => router.push('/account')}
             right={
-              <Text style={styles.emailText} numberOfLines={1}>
-                {user?.email ?? ''}
-              </Text>
+              <View style={styles.manageRight}>
+                <Text style={styles.emailText} numberOfLines={1}>
+                  {user?.email ?? ''}
+                </Text>
+                <Feather name="chevron-right" size={18} color={COLORS.muted} />
+              </View>
             }
           />
-          <View style={styles.separator} />
-          <TouchableOpacity style={styles.signOutRow} onPress={handleSignOut} disabled={signingOut}>
-            {signingOut ? (
-              <ActivityIndicator color={COLORS.destructive} size="small" />
-            ) : (
-              <Text style={styles.signOutText}>Sign Out</Text>
-            )}
-          </TouchableOpacity>
         </View>
 
         <View style={styles.bottom} />
@@ -396,25 +453,45 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 7,
   },
+  spotifyBtn: {
+    backgroundColor: '#1DB954',
+  },
+  appleBtn: {
+    backgroundColor: '#FA243C',
+  },
   connectBtnText: {
     color: COLORS.text,
     fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  disconnectBtn: {
+    backgroundColor: 'transparent',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  disconnectBtnText: {
+    color: COLORS.muted,
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  testLink: {
+    color: COLORS.accent,
+    fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
   },
   emailText: {
     color: COLORS.muted,
     fontSize: 14,
     fontFamily: 'Inter_400Regular',
-    maxWidth: 200,
+    maxWidth: 170,
   },
-  signOutRow: {
-    paddingVertical: 16,
+  manageRight: {
+    flexDirection: 'row',
     alignItems: 'center',
-  },
-  signOutText: {
-    color: COLORS.destructive,
-    fontSize: 16,
-    fontFamily: 'Inter_600SemiBold',
+    gap: 6,
   },
   bottom: {
     height: 40,

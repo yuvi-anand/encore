@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -14,8 +14,9 @@ import { useAuth } from '../../src/hooks/useAuth';
 import { useArtists } from '../../src/hooks/useArtists';
 import { ArtistCard } from '../../src/components/ArtistCard';
 import { GenreFilter } from '../../src/components/GenreFilter';
-import { searchArtists as searchBandsintown } from '../../src/lib/bandsintown';
-import { Artist, Genre } from '../../src/types';
+import { searchArtists as searchSpotify } from '../../src/lib/spotify';
+import { searchAttractions } from '../../src/lib/ticketmaster';
+import { Artist, Genre, artistMatchesGenre } from '../../src/types';
 
 const COLORS = {
   bg: '#000',
@@ -29,45 +30,86 @@ const COLORS = {
 let searchTimeout: ReturnType<typeof setTimeout>;
 
 export default function DiscoverScreen() {
-  const { user } = useAuth();
-  const { userArtists, addArtist } = useArtists(user?.id);
+  const { profile } = useAuth();
+  const { userArtists, addArtist } = useArtists();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Partial<Artist>[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searchedQuery, setSearchedQuery] = useState('');
+  const [adding, setAdding] = useState<Set<string>>(new Set());
   const [selectedGenre, setSelectedGenre] = useState<Genre | null>(null);
+  // Monotonic id so a slow earlier response can't overwrite a newer query's.
+  const reqId = useRef(0);
 
-  const followingIds = useMemo(
-    () => new Set(userArtists.map((ua) => ua.artist?.bandsintown_id).filter(Boolean) as string[]),
+  // Track which artists are already followed by name (covers all sources).
+  const followingNames = useMemo(
+    () =>
+      new Set(
+        userArtists
+          .map((ua) => ua.artist?.name?.toLowerCase())
+          .filter(Boolean) as string[]
+      ),
     [userArtists]
   );
 
   const handleSearch = useCallback((text: string) => {
     setQuery(text);
     clearTimeout(searchTimeout);
-    if (!text.trim()) {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      reqId.current += 1; // cancel any in-flight search
       setResults([]);
+      setSearching(false);
+      setSearchedQuery('');
       return;
     }
+    // Show the spinner immediately (keep old results visible underneath) so it
+    // never flashes "no results" while you're still typing.
+    setSearching(true);
+    const myId = ++reqId.current;
     searchTimeout = setTimeout(async () => {
-      setSearching(true);
-      const res = await searchBandsintown(text.trim());
-      setResults(res);
+      const token = profile?.spotify_token;
+      const [sp, tm] = await Promise.all([
+        token ? searchSpotify(trimmed, token) : Promise.resolve([]),
+        searchAttractions(trimmed),
+      ]);
+      if (myId !== reqId.current) return; // a newer keystroke superseded this
+      // Spotify results win on name collisions (better metadata).
+      const merged: Partial<Artist>[] = [];
+      const seen = new Set<string>();
+      for (const a of [...sp, ...tm]) {
+        const key = a.name?.toLowerCase() ?? '';
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        merged.push(a);
+      }
+      setResults(merged);
+      setSearchedQuery(trimmed);
       setSearching(false);
-    }, 500);
-  }, []);
+    }, 200);
+  }, [profile?.spotify_token]);
 
   const handleAdd = async (artist: Partial<Artist>) => {
+    const key = artist.name?.toLowerCase() ?? '';
+    setAdding((prev) => new Set(prev).add(key));
     await addArtist(artist, 'manual');
+    setAdding((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
   };
 
   const pairs: Partial<Artist>[][] = useMemo(() => {
-    const src = results;
+    const src = selectedGenre
+      ? results.filter((a) => artistMatchesGenre(a.genres, selectedGenre))
+      : results;
     const rows: Partial<Artist>[][] = [];
     for (let i = 0; i < src.length; i += 2) {
       rows.push(src.slice(i, i + 2));
     }
     return rows;
-  }, [results]);
+  }, [results, selectedGenre]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -87,8 +129,9 @@ export default function DiscoverScreen() {
           autoCorrect={false}
           autoCapitalize="none"
         />
+        {searching && <ActivityIndicator color={COLORS.muted} size="small" style={styles.searchIcon} />}
         {query.length > 0 && (
-          <TouchableOpacity onPress={() => { setQuery(''); setResults([]); }}>
+          <TouchableOpacity onPress={() => handleSearch('')}>
             <Feather name="x" size={18} color={COLORS.muted} />
           </TouchableOpacity>
         )}
@@ -96,19 +139,14 @@ export default function DiscoverScreen() {
 
       <GenreFilter selected={selectedGenre} onSelect={setSelectedGenre} />
 
-      {searching && (
-        <View style={styles.loadingRow}>
-          <ActivityIndicator color={COLORS.accent} />
-        </View>
-      )}
-
-      {!searching && results.length === 0 && query.length > 0 && (
+      {/* Only show "no results" once a search for the CURRENT text has finished. */}
+      {!searching && results.length === 0 && query.trim().length > 0 && searchedQuery === query.trim() && (
         <View style={styles.empty}>
-          <Text style={styles.emptyText}>No artists found for "{query}"</Text>
+          <Text style={styles.emptyText}>No artists found for "{query.trim()}"</Text>
         </View>
       )}
 
-      {!searching && results.length === 0 && query.length === 0 && (
+      {query.trim().length === 0 && (
         <View style={styles.empty}>
           <Text style={styles.emptyText}>Search for an artist to get started.</Text>
         </View>
@@ -120,8 +158,9 @@ export default function DiscoverScreen() {
         renderItem={({ item: row }) => (
           <View style={styles.row}>
             {row.map((a, i) => {
-              const key = a.bandsintown_id ?? a.spotify_id ?? a.name ?? String(i);
-              const isFollowing = followingIds.has(a.bandsintown_id ?? '');
+              const key = a.bandsintown_id ?? a.ticketmaster_id ?? a.name ?? String(i);
+              const nameKey = a.name?.toLowerCase() ?? '';
+              const isFollowing = followingNames.has(nameKey) || adding.has(nameKey);
               return (
                 <View key={key} style={styles.cell}>
                   <ArtistCard
@@ -129,8 +168,8 @@ export default function DiscoverScreen() {
                       id: key,
                       name: a.name ?? '',
                       bandsintown_id: a.bandsintown_id ?? null,
-                      ticketmaster_id: null,
-                      spotify_id: null,
+                      ticketmaster_id: a.ticketmaster_id ?? null,
+                      spotify_id: a.spotify_id ?? null,
                       apple_music_id: null,
                       genres: a.genres ?? [],
                       image_url: a.image_url ?? null,
@@ -149,6 +188,8 @@ export default function DiscoverScreen() {
         )}
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
+        keyboardDismissMode="on-drag"
+        keyboardShouldPersistTaps="handled"
       />
     </SafeAreaView>
   );

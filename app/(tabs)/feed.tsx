@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -6,13 +6,13 @@ import {
   FlatList,
   TouchableOpacity,
   RefreshControl,
-  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../src/hooks/useAuth';
 import { useArtists } from '../../src/hooks/useArtists';
 import { useEvents } from '../../src/hooks/useEvents';
 import { EventCard } from '../../src/components/EventCard';
+import { syncEventReminders } from '../../src/lib/notifications';
 import { Event, Artist } from '../../src/types';
 
 type Filter = 'all' | 'week' | 'month';
@@ -27,8 +27,13 @@ const COLORS = {
 
 export default function FeedScreen() {
   const { user, profile } = useAuth();
-  const { userArtists } = useArtists(user?.id);
-  const artistIds = userArtists.map((ua) => ua.artist_id);
+  const { userArtists } = useArtists();
+  // Memoize so the array reference is stable between renders — otherwise
+  // useEvents' callbacks rebuild every render and trigger a refetch loop.
+  const artistIds = useMemo(
+    () => userArtists.map((ua) => ua.artist_id),
+    [userArtists]
+  );
   const homeCities = profile?.home_cities ?? [];
   const radius = profile?.notification_radius_miles ?? 50;
 
@@ -40,6 +45,16 @@ export default function FeedScreen() {
   );
 
   const [filter, setFilter] = useState<Filter>('all');
+
+  // Schedule reminder notifications for the in-area upcoming shows whenever the
+  // list or the user's notification preferences change.
+  useEffect(() => {
+    if (events.length === 0) return;
+    syncEventReminders(events, {
+      weekBefore: profile?.notify_week_before ?? true,
+      dayBefore: profile?.notify_day_before ?? true,
+    });
+  }, [events, profile?.notify_week_before, profile?.notify_day_before]);
 
   const filtered = useMemo(() => {
     const now = new Date();
@@ -72,11 +87,7 @@ export default function FeedScreen() {
         )}
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.filterRow}
-      >
+      <View style={styles.filterRow}>
         {filterOptions.map((opt) => (
           <TouchableOpacity
             key={opt.key}
@@ -88,7 +99,7 @@ export default function FeedScreen() {
             </Text>
           </TouchableOpacity>
         ))}
-      </ScrollView>
+      </View>
 
       <FlatList
         data={filtered}
@@ -153,7 +164,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#111',
     borderRadius: 20,
     paddingHorizontal: 14,
-    paddingVertical: 7,
+    height: 36,
+    justifyContent: 'center',
     borderWidth: 1,
     borderColor: '#222',
   },

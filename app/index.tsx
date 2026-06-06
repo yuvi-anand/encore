@@ -1,12 +1,11 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Animated } from 'react-native';
-import { router } from 'expo-router';
-import { useAuth } from '../src/hooks/useAuth';
 
+// The AuthGate in _layout.tsx handles redirecting to the right place once
+// auth state resolves. This screen is just the branded splash shown briefly.
 export default function SplashScreen() {
   const opacity = useRef(new Animated.Value(0)).current;
   const scale = useRef(new Animated.Value(0.85)).current;
-  const { user, loading } = useAuth();
 
   useEffect(() => {
     Animated.parallel([
@@ -22,19 +21,7 @@ export default function SplashScreen() {
         useNativeDriver: true,
       }),
     ]).start();
-  }, []);
-
-  useEffect(() => {
-    if (loading) return;
-    const timeout = setTimeout(() => {
-      if (user) {
-        router.replace('/(tabs)/feed');
-      } else {
-        router.replace('/(auth)/login');
-      }
-    }, 1400);
-    return () => clearTimeout(timeout);
-  }, [loading, user]);
+  }, [opacity, scale]);
 
   return (
     <View style={styles.container}>

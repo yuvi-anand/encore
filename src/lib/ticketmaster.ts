@@ -31,6 +31,54 @@ interface TmAttraction {
   classifications?: { genre?: { name: string } }[];
 }
 
+/** Lowercase, strip accents and punctuation for name comparison. */
+function normalizeName(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9 ]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const TRIBUTE_TERMS = [
+  'tribute',
+  'cover band',
+  'covers',
+  'karaoke',
+  'experience',
+  'celebration of',
+  'songs of',
+  'music of',
+  'reimagined',
+  'as performed by',
+  'salute',
+  'homage',
+  'a night of',
+];
+
+/**
+ * Verifies an event genuinely features the artist — not a tribute/cover act.
+ * Ticketmaster keyword search returns "Sade Tribute" when searching "Sade",
+ * so we require one of the event's attractions to match the artist name
+ * exactly and reject anything that looks like a tribute.
+ */
+function eventIsRealArtist(ev: TmEvent, artistName: string): boolean {
+  const target = normalizeName(artistName);
+  const attractions = ev._embedded?.attractions ?? [];
+
+  // Reject obvious tribute phrasing anywhere in the event/attraction names.
+  const haystacks = [ev.name, ...attractions.map((a) => a.name)]
+    .filter(Boolean)
+    .map((s) => (s as string).toLowerCase());
+  if (haystacks.some((h) => TRIBUTE_TERMS.some((t) => h.includes(t)))) return false;
+
+  // Require an exact attraction-name match to the artist.
+  if (attractions.length === 0) return false;
+  return attractions.some((a) => normalizeName(a.name) === target);
+}
+
 function normalizeTmEvent(
   ev: TmEvent,
   artistId: string
@@ -84,15 +132,23 @@ export async function searchEvents(
   radius?: number
 ): Promise<Omit<Event, 'id' | 'created_at' | 'artist'>[]> {
   try {
-    let url = `${BASE_URL}/events.json?apikey=${API_KEY}&keyword=${encodeURIComponent(artistName)}&classificationName=music&size=50&sort=date,asc`;
+    const startDateTime = new Date().toISOString().split('.')[0] + 'Z';
+    let url = `${BASE_URL}/events.json?apikey=${API_KEY}&keyword=${encodeURIComponent(artistName)}&classificationName=music&size=50&sort=date,asc&startDateTime=${startDateTime}`;
     if (city) url += `&city=${encodeURIComponent(city)}`;
     if (radius) url += `&radius=${radius}&unit=miles`;
 
-    const res = await fetch(url);
+    // Retry on rate-limit (429) with simple backoff.
+    let res = await fetch(url);
+    for (let attempt = 0; res.status === 429 && attempt < 3; attempt++) {
+      await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+      res = await fetch(url);
+    }
     if (!res.ok) throw new Error(`Ticketmaster events error: ${res.status}`);
     const data = await res.json();
     const events: TmEvent[] = data._embedded?.events ?? [];
-    return events.map((ev) => normalizeTmEvent(ev, artistId));
+    return events
+      .filter((ev) => eventIsRealArtist(ev, artistName))
+      .map((ev) => normalizeTmEvent(ev, artistId));
   } catch (error) {
     console.error(`searchEvents (${artistName}) error:`, error);
     return [];

@@ -30,8 +30,19 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [spotifyLoading, setSpotifyLoading] = useState(false);
 
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, signInWithSpotify } = useAuth();
+
+  const handleSpotify = async () => {
+    setSpotifyLoading(true);
+    const error = await signInWithSpotify();
+    setSpotifyLoading(false);
+    if (error) {
+      Alert.alert('Spotify sign-in failed', error.message);
+    }
+    // On success the auth gate redirects automatically.
+  };
 
   const handleSubmit = async () => {
     if (!email || !password) {
@@ -124,10 +135,16 @@ export default function LoginScreen() {
             <View style={styles.dividerLine} />
           </View>
 
-          <TouchableOpacity style={styles.spotifyButton} onPress={() => {
-            Alert.alert('Spotify Auth', 'Complete sign-in first, then connect Spotify in onboarding.');
-          }}>
-            <Text style={styles.spotifyButtonText}>Continue with Spotify</Text>
+          <TouchableOpacity
+            style={styles.spotifyButton}
+            onPress={handleSpotify}
+            disabled={spotifyLoading}
+          >
+            {spotifyLoading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.spotifyButtonText}>Continue with Spotify</Text>
+            )}
           </TouchableOpacity>
         </View>
 

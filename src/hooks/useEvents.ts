@@ -1,8 +1,20 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { getArtistEvents } from '../lib/bandsintown';
-import { searchEvents } from '../lib/ticketmaster';
+import { syncArtistEvents } from '../lib/events';
 import { Event, Artist, HomeCity } from '../types';
+
+type EventRow = Event & { artist: Artist };
+
+/** Whether an event's city matches one of the user's home cities. */
+function matchesHomeCity(event: Pick<Event, 'venue_city'>, homeCities: HomeCity[]): boolean {
+  if (homeCities.length === 0) return true; // no filter set → show everything
+  const venue = (event.venue_city ?? '').toLowerCase().trim();
+  if (!venue) return false;
+  return homeCities.some((c) => {
+    const home = c.city.toLowerCase().trim();
+    return home.length > 0 && (venue.includes(home) || home.includes(venue));
+  });
+}
 
 export function useEvents(
   userId: string | undefined,
@@ -10,9 +22,10 @@ export function useEvents(
   homeCities: HomeCity[],
   radiusMiles: number
 ) {
-  const [events, setEvents] = useState<(Event & { artist: Artist })[]>([]);
+  const [events, setEvents] = useState<EventRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const autoRefreshedFor = useRef<string>('');
 
   const fetchEvents = useCallback(async () => {
     if (!userId || artistIds.length === 0) {
@@ -31,10 +44,11 @@ export function useEvents(
     if (error) {
       console.error('fetchEvents error:', error);
     } else {
-      setEvents((data ?? []) as (Event & { artist: Artist })[]);
+      const rows = ((data ?? []) as EventRow[]).filter((e) => matchesHomeCity(e, homeCities));
+      setEvents(rows);
     }
     setLoading(false);
-  }, [userId, artistIds]);
+  }, [userId, artistIds, homeCities]);
 
   useEffect(() => {
     fetchEvents();
@@ -43,62 +57,20 @@ export function useEvents(
   const refreshEvents = useCallback(async () => {
     if (!userId || artistIds.length === 0) return;
     setRefreshing(true);
-
-    // Fetch artist records
-    const { data: artistRows } = await supabase
-      .from('artists')
-      .select('*')
-      .in('id', artistIds);
-
-    const artists = (artistRows ?? []) as Artist[];
-
-    // Primary city for location filtering
-    const primaryCity = homeCities[0];
-    const locationStr = primaryCity
-      ? `${primaryCity.city},${primaryCity.state ?? primaryCity.country}`
-      : undefined;
-
-    const allEvents: Omit<Event, 'id' | 'created_at' | 'artist'>[] = [];
-
-    await Promise.allSettled(
-      artists.map(async (artist) => {
-        // Bandsintown
-        const btEvents = await getArtistEvents(
-          artist.name,
-          artist.id,
-          locationStr,
-          radiusMiles
-        );
-        allEvents.push(...btEvents);
-
-        // Ticketmaster — search per city
-        for (const city of homeCities.slice(0, 2)) {
-          const tmEvents = await searchEvents(artist.name, artist.id, city.city, radiusMiles);
-          allEvents.push(...tmEvents);
-        }
-      })
-    );
-
-    // Upsert events — handle duplicates by bandsintown_id or ticketmaster_id
-    if (allEvents.length > 0) {
-      const btEvents = allEvents.filter((e) => e.bandsintown_id);
-      const tmEvents = allEvents.filter((e) => e.ticketmaster_id && !e.bandsintown_id);
-
-      if (btEvents.length > 0) {
-        await supabase
-          .from('events')
-          .upsert(btEvents, { onConflict: 'bandsintown_id', ignoreDuplicates: false });
-      }
-      if (tmEvents.length > 0) {
-        await supabase
-          .from('events')
-          .upsert(tmEvents, { onConflict: 'ticketmaster_id', ignoreDuplicates: false });
-      }
-    }
-
+    await syncArtistEvents(artistIds);
     await fetchEvents();
     setRefreshing(false);
-  }, [userId, artistIds, homeCities, radiusMiles, fetchEvents]);
+  }, [userId, artistIds, fetchEvents]);
+
+  // Auto-fetch shows the first time we have artists, so the feed populates
+  // without the user having to pull-to-refresh.
+  useEffect(() => {
+    if (!userId || artistIds.length === 0) return;
+    const key = `${userId}:${artistIds.length}`;
+    if (autoRefreshedFor.current === key) return;
+    autoRefreshedFor.current = key;
+    refreshEvents();
+  }, [userId, artistIds, refreshEvents]);
 
   return {
     events,

@@ -5,26 +5,26 @@ import { Artist } from '../types';
 WebBrowser.maybeCompleteAuthSession();
 
 const CLIENT_ID = process.env.EXPO_PUBLIC_SPOTIFY_CLIENT_ID!;
-const REDIRECT_URI = process.env.EXPO_PUBLIC_SPOTIFY_REDIRECT_URI ?? AuthSession.makeRedirectUri({ scheme: 'encore', path: 'auth/spotify' });
+const REDIRECT_URI = AuthSession.makeRedirectUri({ scheme: 'encore', path: 'auth/spotify' });
+
+// Log the exact redirect URI so it can be registered in the Spotify dashboard.
+console.log('[Spotify] Redirect URI to register:', REDIRECT_URI);
 
 const discovery = {
   authorizationEndpoint: 'https://accounts.spotify.com/authorize',
   tokenEndpoint: 'https://accounts.spotify.com/api/token',
 };
 
-const SCOPES = [
-  'user-top-read',
-  'user-follow-read',
-  'user-read-email',
-].join(' ');
+const SCOPES = ['user-top-read', 'user-follow-read', 'user-read-email'];
 
 export function useSpotifyAuth() {
   const [request, response, promptAsync] = AuthSession.useAuthRequest(
     {
       clientId: CLIENT_ID,
-      scopes: SCOPES.split(' '),
+      scopes: SCOPES,
       redirectUri: REDIRECT_URI,
-      responseType: AuthSession.ResponseType.Token,
+      responseType: AuthSession.ResponseType.Code,
+      usePKCE: true,
     },
     discovery
   );
@@ -32,21 +32,51 @@ export function useSpotifyAuth() {
   return { request, response, promptAsync };
 }
 
-export async function connectSpotify(): Promise<string | null> {
+export async function exchangeSpotifyCode(code: string, codeVerifier: string): Promise<string | null> {
   try {
-    const result = await AuthSession.startAsync({
-      authUrl: `https://accounts.spotify.com/authorize?client_id=${CLIENT_ID}&response_type=token&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(SCOPES)}`,
-      returnUrl: REDIRECT_URI,
+    const res = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: REDIRECT_URI,
+        client_id: CLIENT_ID,
+        code_verifier: codeVerifier,
+      }).toString(),
     });
-
-    if (result.type === 'success' && result.params.access_token) {
-      return result.params.access_token;
+    if (!res.ok) {
+      const err = await res.text();
+      console.error('Spotify token exchange error:', err);
+      return null;
     }
-    return null;
-  } catch (error) {
-    console.error('Spotify connect error:', error);
+    const data = await res.json();
+    return data.access_token ?? null;
+  } catch (e) {
+    console.error('exchangeSpotifyCode error:', e);
     return null;
   }
+}
+
+/**
+ * Pulls the user's full Spotify library — top artists (all time, 6mo, recent)
+ * plus everyone they follow — de-duped by spotify id. This is what populates
+ * the app after connecting.
+ */
+export async function getLibraryArtists(token: string): Promise<Partial<Artist>[]> {
+  const [topLong, topMedium, topShort, followed] = await Promise.all([
+    getTopArtists(token, 'long_term'),
+    getTopArtists(token, 'medium_term'),
+    getTopArtists(token, 'short_term'),
+    getFollowedArtists(token),
+  ]);
+
+  const byId = new Map<string, Partial<Artist>>();
+  for (const a of [...topLong, ...topMedium, ...topShort, ...followed]) {
+    const key = a.spotify_id ?? a.name ?? '';
+    if (key && !byId.has(key)) byId.set(key, a);
+  }
+  return Array.from(byId.values());
 }
 
 function normalizeSpotifyArtist(item: SpotifyArtistItem): Partial<Artist> {
@@ -69,10 +99,13 @@ interface SpotifyArtistItem {
   images?: { url: string; width: number; height: number }[];
 }
 
-export async function getTopArtists(token: string): Promise<Partial<Artist>[]> {
+export async function getTopArtists(
+  token: string,
+  timeRange: 'long_term' | 'medium_term' | 'short_term' = 'long_term'
+): Promise<Partial<Artist>[]> {
   try {
     const res = await fetch(
-      'https://api.spotify.com/v1/me/top/artists?time_range=long_term&limit=50',
+      `https://api.spotify.com/v1/me/top/artists?time_range=${timeRange}&limit=50`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
     if (!res.ok) throw new Error(`Spotify top artists error: ${res.status}`);
@@ -87,22 +120,17 @@ export async function getTopArtists(token: string): Promise<Partial<Artist>[]> {
 export async function getFollowedArtists(token: string): Promise<Partial<Artist>[]> {
   const results: Partial<Artist>[] = [];
   let url: string | null = 'https://api.spotify.com/v1/me/following?type=artist&limit=50';
-
   try {
     while (url) {
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res: Response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) throw new Error(`Spotify followed artists error: ${res.status}`);
-      const data = await res.json();
-      const items = data.artists?.items as SpotifyArtistItem[];
-      results.push(...items.map(normalizeSpotifyArtist));
+      const data: any = await res.json();
+      results.push(...(data.artists?.items as SpotifyArtistItem[]).map(normalizeSpotifyArtist));
       url = data.artists?.next ?? null;
     }
   } catch (error) {
     console.error('getFollowedArtists error:', error);
   }
-
   return results;
 }
 
@@ -116,7 +144,7 @@ export async function searchArtists(query: string, token: string): Promise<Parti
     const data = await res.json();
     return (data.artists.items as SpotifyArtistItem[]).map(normalizeSpotifyArtist);
   } catch (error) {
-    console.error('searchArtists (Spotify) error:', error);
+    console.error('searchArtists error:', error);
     return [];
   }
 }

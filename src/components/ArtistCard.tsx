@@ -16,6 +16,8 @@ interface ArtistCardProps {
   sourceBadge?: 'spotify' | 'apple_music' | 'manual' | null;
   isFollowing?: boolean;
   onAdd?: () => void;
+  /** Visual selected state (used for multi-select like onboarding). */
+  selected?: boolean;
 }
 
 const COLORS = {
@@ -35,16 +37,22 @@ export function ArtistCard({
   sourceBadge,
   isFollowing,
   onAdd,
+  selected,
 }: ArtistCardProps) {
   const imageSize = size === 'sm' ? 56 : 80;
 
   return (
     <TouchableOpacity
-      style={styles.card}
+      style={[styles.card, selected && styles.cardSelected]}
       onPress={onPress}
       onLongPress={onRemove}
       activeOpacity={0.8}
     >
+      {selected && (
+        <View style={styles.selectedCheck}>
+          <Text style={styles.selectedCheckText}>✓</Text>
+        </View>
+      )}
       {artist.image_url ? (
         <Image
           source={{ uri: artist.image_url }}
@@ -63,19 +71,17 @@ export function ArtistCard({
         </View>
       )}
 
-      <Text style={styles.name} numberOfLines={2}>
+      <Text style={styles.name} numberOfLines={1}>
         {artist.name}
       </Text>
 
-      {artist.genres.length > 0 && (
-        <View style={styles.genres}>
-          {artist.genres.slice(0, 2).map((g) => (
-            <View key={g} style={styles.genreChip}>
-              <Text style={styles.genreText}>{g}</Text>
-            </View>
-          ))}
-        </View>
-      )}
+      <View style={styles.genres}>
+        {artist.genres.slice(0, 2).map((g) => (
+          <View key={g} style={styles.genreChip}>
+            <Text style={styles.genreText} numberOfLines={1}>{g}</Text>
+          </View>
+        ))}
+      </View>
 
       {sourceBadge && (
         <View style={[styles.sourceBadge, sourceBadge === 'spotify' && styles.sourceBadgeSpotify]}>
@@ -107,6 +113,28 @@ const styles = StyleSheet.create({
     flex: 1,
     margin: 4,
     minWidth: 0,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  cardSelected: {
+    borderColor: COLORS.accent,
+  },
+  selectedCheck: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: COLORS.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1,
+  },
+  selectedCheckText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
   },
   image: {
     marginBottom: 8,
@@ -124,26 +152,32 @@ const styles = StyleSheet.create({
   },
   name: {
     color: COLORS.text,
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
     textAlign: 'center',
     marginBottom: 6,
+    width: '100%',
   },
   genres: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     justifyContent: 'center',
+    alignItems: 'center',
     gap: 4,
+    height: 20,
+    overflow: 'hidden',
+    maxWidth: '100%',
   },
   genreChip: {
     backgroundColor: COLORS.chip,
     borderRadius: 20,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    flexShrink: 1,
   },
   genreText: {
     color: COLORS.muted,
     fontSize: 10,
+    fontFamily: 'Inter_400Regular',
   },
   sourceBadge: {
     position: 'absolute',

@@ -10,11 +10,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
-import { useAuth } from '../../src/hooks/useAuth';
 import { useArtists } from '../../src/hooks/useArtists';
 import { ArtistCard } from '../../src/components/ArtistCard';
 import { GenreFilter } from '../../src/components/GenreFilter';
-import { Genre } from '../../src/types';
+import { Genre, ALL_GENRES, artistMatchesGenre, genreCounts } from '../../src/types';
 
 const COLORS = {
   bg: '#000',
@@ -24,18 +23,20 @@ const COLORS = {
 };
 
 export default function ArtistsScreen() {
-  const { user } = useAuth();
-  const { userArtists, removeArtist, loading } = useArtists(user?.id);
+  const { userArtists, removeArtist, loading } = useArtists();
   const [selectedGenre, setSelectedGenre] = useState<Genre | null>(null);
 
   const filtered = useMemo(() => {
     if (!selectedGenre) return userArtists;
-    return userArtists.filter((ua) =>
-      ua.artist?.genres?.some(
-        (g) => g.toLowerCase() === selectedGenre.toLowerCase()
-      )
-    );
+    return userArtists.filter((ua) => artistMatchesGenre(ua.artist?.genres, selectedGenre));
   }, [userArtists, selectedGenre]);
+
+  // Only show genres the user actually has artists in, ordered by count desc
+  // (most-listened genre first).
+  const orderedGenres = useMemo(() => {
+    const counts = genreCounts(userArtists.map((ua) => ua.artist?.genres));
+    return ALL_GENRES.filter((g) => counts[g] > 0).sort((a, b) => counts[b] - counts[a]);
+  }, [userArtists]);
 
   const handleRemove = (artistId: string, artistName: string) => {
     Alert.alert(
@@ -69,7 +70,7 @@ export default function ArtistsScreen() {
         </View>
       </View>
 
-      <GenreFilter selected={selectedGenre} onSelect={setSelectedGenre} />
+      <GenreFilter selected={selectedGenre} onSelect={setSelectedGenre} genres={orderedGenres} />
 
       <FlatList
         data={pairs}
@@ -89,6 +90,7 @@ export default function ArtistsScreen() {
             {row.length === 1 && <View style={styles.cell} />}
           </View>
         )}
+        style={styles.flex}
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={
@@ -144,6 +146,9 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontFamily: 'Inter_700Bold',
+  },
+  flex: {
+    flex: 1,
   },
   list: {
     padding: 12,

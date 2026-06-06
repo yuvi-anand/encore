@@ -11,12 +11,12 @@ import {
   FlatList,
 } from 'react-native';
 import { router } from 'expo-router';
-import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import { useAuth } from '../../src/hooks/useAuth';
 import { useArtists } from '../../src/hooks/useArtists';
-import { connectSpotify, getTopArtists } from '../../src/lib/spotify';
+import { useSpotifyAuth, exchangeSpotifyCode, getLibraryArtists } from '../../src/lib/spotify';
 import { ArtistCard } from '../../src/components/ArtistCard';
 import { CityChip } from '../../src/components/CityChip';
+import { geocodeCity } from '../../src/lib/geocode';
 import { Artist, HomeCity } from '../../src/types';
 
 const COLORS = {
@@ -41,24 +41,43 @@ export default function OnboardingScreen() {
   const [homeCities, setHomeCities] = useState<HomeCity[]>([]);
   const [saving, setSaving] = useState(false);
 
-  const { user, updateProfile } = useAuth();
-  const { addArtist } = useArtists(user?.id);
+  const { updateProfile } = useAuth();
+  const { importArtists } = useArtists();
+  const { request, response, promptAsync } = useSpotifyAuth();
+
+  // Handle Spotify auth response
+  React.useEffect(() => {
+    if (response?.type === 'success') {
+      const code = (response as any).params?.code;
+      const codeVerifier = request?.codeVerifier;
+      if (code && codeVerifier) {
+        exchangeSpotifyCode(code, codeVerifier).then((token) => {
+          if (token) {
+            setSpotifyToken(token);
+            updateProfile({ spotify_token: token });
+            getLibraryArtists(token).then((artists) => {
+              setTopArtists(artists);
+              const ids = new Set(artists.map((a, i) => a.spotify_id ?? String(i)));
+              setSelectedArtistIds(ids);
+              setSpotifyConnecting(false);
+            });
+          } else {
+            setSpotifyConnecting(false);
+            Alert.alert('Connection failed', 'Could not get Spotify token. Please try again.');
+          }
+        });
+      }
+    } else if (response?.type === 'error' || response?.type === 'dismiss') {
+      setSpotifyConnecting(false);
+      if (response?.type === 'error') {
+        Alert.alert('Connection failed', 'Could not connect to Spotify. Please try again.');
+      }
+    }
+  }, [response]);
 
   const handleSpotifyConnect = async () => {
     setSpotifyConnecting(true);
-    const token = await connectSpotify();
-    setSpotifyConnecting(false);
-    if (token) {
-      setSpotifyToken(token);
-      await updateProfile({ spotify_token: token });
-      const artists = await getTopArtists(token);
-      setTopArtists(artists);
-      // Pre-select all
-      const ids = new Set(artists.map((a, i) => a.spotify_id ?? String(i)));
-      setSelectedArtistIds(ids);
-    } else {
-      Alert.alert('Connection failed', 'Could not connect to Spotify. Please try again.');
-    }
+    await promptAsync();
   };
 
   const toggleArtist = (key: string) => {
@@ -70,22 +89,16 @@ export default function OnboardingScreen() {
     });
   };
 
-  const addCity = () => {
+  const addCity = async () => {
     const trimmed = cityInput.trim();
     if (!trimmed) return;
     if (homeCities.length >= 3) {
       Alert.alert('Limit reached', 'You can add up to 3 home cities.');
       return;
     }
-    const city: HomeCity = {
-      city: trimmed,
-      state: '',
-      country: 'US',
-      lat: 0,
-      lng: 0,
-    };
-    setHomeCities((prev) => [...prev, city]);
     setCityInput('');
+    const city = await geocodeCity(trimmed);
+    setHomeCities((prev) => [...prev, city]);
   };
 
   const removeCity = (index: number) => {
@@ -99,12 +112,12 @@ export default function OnboardingScreen() {
         await updateProfile({ home_cities: homeCities });
       }
 
-      // Add selected artists
-      const selectedArtists = topArtists.filter((a) =>
-        selectedArtistIds.has(a.spotify_id ?? '')
+      // Import selected artists in one batch.
+      const selectedArtists = topArtists.filter((a, i) =>
+        selectedArtistIds.has(a.spotify_id ?? String(i))
       );
-      for (const artist of selectedArtists) {
-        await addArtist(artist, 'spotify');
+      if (selectedArtists.length > 0) {
+        await importArtists(selectedArtists, 'spotify');
       }
     } catch (e) {
       console.error('Onboarding finish error:', e);
@@ -209,7 +222,7 @@ function StepConnect({
           <Text style={stepStyles.serviceDesc}>Import your top artists & followed artists</Text>
         </View>
         <TouchableOpacity
-          style={[stepStyles.connectButton, spotifyToken && stepStyles.connectedButton]}
+          style={[stepStyles.connectButton, stepStyles.spotifyButton, spotifyToken && stepStyles.connectedButton]}
           onPress={onConnectSpotify}
           disabled={!!spotifyToken || connecting}
         >
@@ -228,7 +241,7 @@ function StepConnect({
           <Text style={stepStyles.serviceName}>Apple Music</Text>
           <Text style={stepStyles.serviceDesc}>Import your recently played artists</Text>
         </View>
-        <TouchableOpacity style={stepStyles.connectButton} onPress={() => Alert.alert('Coming soon', 'Apple Music integration coming soon.')}>
+        <TouchableOpacity style={[stepStyles.connectButton, stepStyles.appleButton]} onPress={() => Alert.alert('Coming soon', 'Apple Music integration coming soon.')}>
           <Text style={stepStyles.connectButtonText}>Connect</Text>
         </TouchableOpacity>
       </View>
@@ -337,7 +350,7 @@ function StepArtists({
                   }}
                   onPress={() => onToggle(key)}
                   size="sm"
-                  isFollowing={isSelected}
+                  selected={isSelected}
                 />
               </View>
             );
@@ -384,6 +397,12 @@ const stepStyles = StyleSheet.create({
     paddingVertical: 8,
     minWidth: 88,
     alignItems: 'center',
+  },
+  spotifyButton: {
+    backgroundColor: '#1DB954',
+  },
+  appleButton: {
+    backgroundColor: '#FA243C',
   },
   connectedButton: {
     backgroundColor: '#222',

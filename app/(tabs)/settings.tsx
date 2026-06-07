@@ -11,14 +11,15 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
-import { Feather } from '@expo/vector-icons';
+import { Feather, FontAwesome } from '@expo/vector-icons';
 import { useAuth } from '../../src/hooks/useAuth';
 import { useArtists } from '../../src/hooks/useArtists';
 import { CityChip } from '../../src/components/CityChip';
-import { useSpotifyAuth, exchangeSpotifyCode, getLibraryArtists } from '../../src/lib/spotify';
+import { useSpotifyAuth, exchangeSpotifyCode, lastSpotifyError } from '../../src/lib/spotify';
 import { geocodeCity } from '../../src/lib/geocode';
-import { sendTestNotification } from '../../src/lib/notifications';
+import { sendTestNotification, sendLocalNotification } from '../../src/lib/notifications';
 import { HomeCity } from '../../src/types';
 
 const COLORS = {
@@ -60,7 +61,7 @@ function SettingsRow({
 
 export default function SettingsScreen() {
   const { user, profile, updateProfile } = useAuth();
-  const { importArtists } = useArtists();
+  const { syncLibrary } = useArtists();
   const [cityInput, setCityInput] = useState('');
   const [connectingSpotify, setConnectingSpotify] = useState(false);
 
@@ -98,28 +99,46 @@ export default function SettingsScreen() {
       const code = (response as any).params?.code;
       const codeVerifier = request?.codeVerifier;
       if (code && codeVerifier) {
-        exchangeSpotifyCode(code, codeVerifier).then(async (token) => {
-          if (!token) {
+        exchangeSpotifyCode(code, codeVerifier).then(async (tokens) => {
+          if (!tokens) {
             setConnectingSpotify(false);
             Alert.alert('Error', 'Could not connect to Spotify.');
             return;
           }
-          await updateProfile({ spotify_token: token });
-          // Pull the user's library and populate their artists.
-          try {
-            const library = await getLibraryArtists(token);
-            const count = await importArtists(library, 'spotify');
-            Alert.alert(
-              'Spotify connected',
-              count > 0
-                ? `Imported ${count} artist${count === 1 ? '' : 's'} from your Spotify library.`
-                : 'Connected, but we couldn’t find any artists to import.'
-            );
-          } catch (e) {
-            console.error('Spotify import error:', e);
-            Alert.alert('Connected', 'Spotify connected, but importing artists failed.');
+          // Claim the sync window BEFORE updating the profile, so the
+          // background auto-sync (which fires on the token change) sees a recent
+          // timestamp and defers to this manual import — no lock race.
+          if (user?.id) {
+            await AsyncStorage.setItem(`encore:lastSync:${user.id}`, String(Date.now()));
           }
+          await updateProfile({
+            spotify_token: tokens.accessToken,
+            spotify_refresh_token: tokens.refreshToken,
+          });
+          // Connection is done; the (slower) library import runs in the
+          // background so the UI isn't blocked. Notify when it finishes.
           setConnectingSpotify(false);
+          Alert.alert(
+            'Spotify connected',
+            'We’re importing your library in the background — you’ll get a notification when it’s ready. Feel free to keep using the app.'
+          );
+          (async () => {
+            try {
+              const count = await syncLibrary(tokens.accessToken, 'replace');
+              await sendLocalNotification(
+                'Library imported',
+                count > 0
+                  ? `${count} artists added from your Spotify library.`
+                  : `No artists imported. ${lastSpotifyError || 'No error captured.'}`
+              );
+            } catch (e) {
+              console.error('Spotify import error:', e);
+              await sendLocalNotification(
+                'Import issue',
+                'Spotify connected, but importing your artists failed. Try reconnecting.'
+              );
+            }
+          })();
         });
       } else {
         setConnectingSpotify(false);
@@ -213,7 +232,8 @@ export default function SettingsScreen() {
                   <Text style={styles.disconnectBtnText}>Disconnect</Text>
                 </TouchableOpacity>
               ) : (
-                <TouchableOpacity style={[styles.connectBtn, styles.spotifyBtn]} onPress={handleConnectSpotify}>
+                <TouchableOpacity style={[styles.connectBtn, styles.spotifyBtn, styles.connectBtnRow]} onPress={handleConnectSpotify}>
+                  <FontAwesome name="spotify" size={14} color="#fff" />
                   <Text style={styles.connectBtnText}>Connect</Text>
                 </TouchableOpacity>
               )
@@ -227,9 +247,10 @@ export default function SettingsScreen() {
                 <Text style={[styles.badge, styles.badgeRed]}>Connected</Text>
               ) : (
                 <TouchableOpacity
-                  style={[styles.connectBtn, styles.appleBtn]}
+                  style={[styles.connectBtn, styles.appleBtn, styles.connectBtnRow]}
                   onPress={() => Alert.alert('Coming soon', 'Apple Music integration coming soon.')}
                 >
+                  <FontAwesome name="apple" size={14} color="#fff" />
                   <Text style={styles.connectBtnText}>Connect</Text>
                 </TouchableOpacity>
               )
@@ -455,6 +476,11 @@ const styles = StyleSheet.create({
   },
   spotifyBtn: {
     backgroundColor: '#1DB954',
+  },
+  connectBtnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   appleBtn: {
     backgroundColor: '#FA243C',

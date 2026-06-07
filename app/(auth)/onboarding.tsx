@@ -11,6 +11,7 @@ import {
   FlatList,
 } from 'react-native';
 import { router } from 'expo-router';
+import { FontAwesome } from '@expo/vector-icons';
 import { useAuth } from '../../src/hooks/useAuth';
 import { useArtists } from '../../src/hooks/useArtists';
 import { useSpotifyAuth, exchangeSpotifyCode, getLibraryArtists } from '../../src/lib/spotify';
@@ -51,11 +52,14 @@ export default function OnboardingScreen() {
       const code = (response as any).params?.code;
       const codeVerifier = request?.codeVerifier;
       if (code && codeVerifier) {
-        exchangeSpotifyCode(code, codeVerifier).then((token) => {
-          if (token) {
-            setSpotifyToken(token);
-            updateProfile({ spotify_token: token });
-            getLibraryArtists(token).then((artists) => {
+        exchangeSpotifyCode(code, codeVerifier).then((tokens) => {
+          if (tokens) {
+            setSpotifyToken(tokens.accessToken);
+            updateProfile({
+              spotify_token: tokens.accessToken,
+              spotify_refresh_token: tokens.refreshToken,
+            });
+            getLibraryArtists(tokens.accessToken).then((artists) => {
               setTopArtists(artists);
               const ids = new Set(artists.map((a, i) => a.spotify_id ?? String(i)));
               setSelectedArtistIds(ids);
@@ -229,9 +233,12 @@ function StepConnect({
           {connecting ? (
             <ActivityIndicator color="#fff" size="small" />
           ) : (
-            <Text style={stepStyles.connectButtonText}>
-              {spotifyToken ? 'Connected' : 'Connect'}
-            </Text>
+            <View style={stepStyles.btnRow}>
+              {!spotifyToken && <FontAwesome name="spotify" size={14} color="#fff" />}
+              <Text style={stepStyles.connectButtonText}>
+                {spotifyToken ? 'Connected' : 'Connect'}
+              </Text>
+            </View>
           )}
         </TouchableOpacity>
       </View>
@@ -241,7 +248,8 @@ function StepConnect({
           <Text style={stepStyles.serviceName}>Apple Music</Text>
           <Text style={stepStyles.serviceDesc}>Import your recently played artists</Text>
         </View>
-        <TouchableOpacity style={[stepStyles.connectButton, stepStyles.appleButton]} onPress={() => Alert.alert('Coming soon', 'Apple Music integration coming soon.')}>
+        <TouchableOpacity style={[stepStyles.connectButton, stepStyles.appleButton, stepStyles.btnRow]} onPress={() => Alert.alert('Coming soon', 'Apple Music integration coming soon.')}>
+          <FontAwesome name="apple" size={14} color="#fff" />
           <Text style={stepStyles.connectButtonText}>Connect</Text>
         </TouchableOpacity>
       </View>
@@ -403,6 +411,11 @@ const stepStyles = StyleSheet.create({
   },
   appleButton: {
     backgroundColor: '#FA243C',
+  },
+  btnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   connectedButton: {
     backgroundColor: '#222',

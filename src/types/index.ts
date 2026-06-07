@@ -39,6 +39,7 @@ export interface Profile {
   notify_week_before: boolean;
   notify_day_before: boolean;
   spotify_token: string | null;
+  spotify_refresh_token: string | null;
   apple_music_token: string | null;
   created_at: string;
 }

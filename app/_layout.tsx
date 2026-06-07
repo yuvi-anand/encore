@@ -23,14 +23,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (loading) return;
     const inAuthGroup = segments[0] === '(auth)';
-    const inTabsGroup = segments[0] === '(tabs)';
-    const onOnboarding = segments[0] === '(auth)' && segments[1] === 'onboarding';
+    const onOnboarding = inAuthGroup && segments[1] === 'onboarding';
+    const onSplash = (segments as string[]).length === 0; // the index/splash route
 
     if (!user && !inAuthGroup) {
       router.replace('/(auth)/login');
-    } else if (user && !inTabsGroup && !onOnboarding) {
-      // Logged-in users belong in the tabs (unless mid-onboarding). This also
-      // moves them off the index/splash route once auth resolves.
+    } else if (user && (onSplash || (inAuthGroup && !onOnboarding))) {
+      // Move logged-in users off the splash and auth screens into the app, but
+      // leave them alone on other valid routes (tabs, /account, etc.).
       router.replace('/(tabs)/feed');
     }
   }, [user, loading, segments]);

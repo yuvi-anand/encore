@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,7 +14,7 @@ import { useAuth } from '../../src/hooks/useAuth';
 import { useArtists } from '../../src/hooks/useArtists';
 import { ArtistCard } from '../../src/components/ArtistCard';
 import { GenreFilter } from '../../src/components/GenreFilter';
-import { searchArtists as searchSpotify } from '../../src/lib/spotify';
+import { searchArtists as searchSpotify, getSuggestedArtists } from '../../src/lib/spotify';
 import { searchAttractions } from '../../src/lib/ticketmaster';
 import { Artist, Genre, artistMatchesGenre } from '../../src/types';
 
@@ -38,8 +38,22 @@ export default function DiscoverScreen() {
   const [searchedQuery, setSearchedQuery] = useState('');
   const [adding, setAdding] = useState<Set<string>>(new Set());
   const [selectedGenre, setSelectedGenre] = useState<Genre | null>(null);
+  const [suggestions, setSuggestions] = useState<Partial<Artist>[]>([]);
   // Monotonic id so a slow earlier response can't overwrite a newer query's.
   const reqId = useRef(0);
+
+  // Load "Suggested for you" from Spotify once we have a token.
+  useEffect(() => {
+    const token = profile?.spotify_token;
+    if (!token) return;
+    let active = true;
+    getSuggestedArtists(token).then((res) => {
+      if (active) setSuggestions(res);
+    });
+    return () => {
+      active = false;
+    };
+  }, [profile?.spotify_token]);
 
   // Track which artists are already followed by name (covers all sources).
   const followingNames = useMemo(
@@ -100,16 +114,25 @@ export default function DiscoverScreen() {
     });
   };
 
+  const hasQuery = query.trim().length > 0;
+
+  // Suggestions, minus artists already followed.
+  const suggestionsFiltered = useMemo(
+    () => suggestions.filter((a) => !followingNames.has(a.name?.toLowerCase() ?? '')),
+    [suggestions, followingNames]
+  );
+
   const pairs: Partial<Artist>[][] = useMemo(() => {
+    const base = hasQuery ? results : suggestionsFiltered;
     const src = selectedGenre
-      ? results.filter((a) => artistMatchesGenre(a.genres, selectedGenre))
-      : results;
+      ? base.filter((a) => artistMatchesGenre(a.genres, selectedGenre))
+      : base;
     const rows: Partial<Artist>[][] = [];
     for (let i = 0; i < src.length; i += 2) {
       rows.push(src.slice(i, i + 2));
     }
     return rows;
-  }, [results, selectedGenre]);
+  }, [hasQuery, results, suggestionsFiltered, selectedGenre]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -140,15 +163,24 @@ export default function DiscoverScreen() {
       <GenreFilter selected={selectedGenre} onSelect={setSelectedGenre} />
 
       {/* Only show "no results" once a search for the CURRENT text has finished. */}
-      {!searching && results.length === 0 && query.trim().length > 0 && searchedQuery === query.trim() && (
+      {!searching && results.length === 0 && hasQuery && searchedQuery === query.trim() && (
         <View style={styles.empty}>
           <Text style={styles.emptyText}>No artists found for "{query.trim()}"</Text>
         </View>
       )}
 
-      {query.trim().length === 0 && (
+      {/* Suggestions header when idle. */}
+      {!hasQuery && suggestionsFiltered.length > 0 && (
+        <Text style={styles.sectionTitle}>Suggested for you</Text>
+      )}
+
+      {!hasQuery && suggestionsFiltered.length === 0 && (
         <View style={styles.empty}>
-          <Text style={styles.emptyText}>Search for an artist to get started.</Text>
+          <Text style={styles.emptyText}>
+            {profile?.spotify_token
+              ? 'Search for an artist to get started.'
+              : 'Connect Spotify or search to find artists.'}
+          </Text>
         </View>
       )}
 
@@ -255,5 +287,13 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: 'Inter_400Regular',
     textAlign: 'center',
+  },
+  sectionTitle: {
+    color: COLORS.text,
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 4,
   },
 });

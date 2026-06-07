@@ -2,6 +2,9 @@
 -- Run these in the Supabase SQL Editor (in order).
 -- ============================================================================
 
+-- 0. Spotify refresh token (for background library re-sync) ------------------
+alter table profiles add column if not exists spotify_refresh_token text;
+
 -- 1. Account deletion -------------------------------------------------------
 -- SECURITY DEFINER so an authenticated user can delete *their own* account
 -- (profile data cascades via FKs, then the auth row).

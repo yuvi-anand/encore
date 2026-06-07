@@ -32,6 +32,20 @@ export async function ensureNotificationPermission(): Promise<boolean> {
   return finalStatus === 'granted';
 }
 
+/** Fires a local notification immediately (used for background-task completion). */
+export async function sendLocalNotification(title: string, body: string): Promise<void> {
+  try {
+    const granted = await ensureNotificationPermission();
+    if (!granted) return;
+    await Notifications.scheduleNotificationAsync({
+      content: { title, body, sound: true },
+      trigger: null, // deliver now
+    });
+  } catch (e) {
+    console.error('sendLocalNotification error:', e);
+  }
+}
+
 /** Fires a local notification a couple seconds out to verify delivery works. */
 export async function sendTestNotification(): Promise<boolean> {
   const granted = await ensureNotificationPermission();

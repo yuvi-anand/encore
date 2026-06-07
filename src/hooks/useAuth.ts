@@ -107,7 +107,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       options: {
         redirectTo,
         skipBrowserRedirect: true,
-        scopes: 'user-top-read user-follow-read user-read-email',
+        scopes:
+          'user-top-read user-follow-read user-read-email user-library-read user-read-recently-played playlist-read-private playlist-read-collaborative',
       },
     });
     if (error) return error;
@@ -129,12 +130,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await supabase.auth.exchangeCodeForSession(code);
     if (exchangeError) return exchangeError;
 
-    // Stash the Spotify access token so we can import the user's library.
+    // Stash the Spotify tokens so we can import + later re-sync the library.
     const providerToken = sessionData.session?.provider_token;
+    const providerRefresh = (sessionData.session as any)?.provider_refresh_token;
     if (providerToken && sessionData.session?.user) {
       await supabase
         .from('profiles')
-        .update({ spotify_token: providerToken })
+        .update({ spotify_token: providerToken, spotify_refresh_token: providerRefresh ?? null })
         .eq('id', sessionData.session.user.id);
     }
     return null;

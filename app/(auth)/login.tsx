@@ -12,6 +12,7 @@ import {
   Alert,
 } from 'react-native';
 import { router } from 'expo-router';
+import { FontAwesome } from '@expo/vector-icons';
 import { useAuth } from '../../src/hooks/useAuth';
 
 const COLORS = {
@@ -143,7 +144,10 @@ export default function LoginScreen() {
             {spotifyLoading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.spotifyButtonText}>Continue with Spotify</Text>
+              <View style={styles.spotifyButtonInner}>
+                <FontAwesome name="spotify" size={20} color="#fff" />
+                <Text style={styles.spotifyButtonText}>Continue with Spotify</Text>
+              </View>
             )}
           </TouchableOpacity>
         </View>
@@ -238,6 +242,11 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 16,
     alignItems: 'center',
+  },
+  spotifyButtonInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   spotifyButtonText: {
     color: COLORS.text,

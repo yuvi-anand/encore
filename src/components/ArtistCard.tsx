@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   StyleSheet,
 } from 'react-native';
+import { FontAwesome } from '@expo/vector-icons';
 import { Artist } from '../types';
 
 interface ArtistCardProps {
@@ -84,10 +85,14 @@ export function ArtistCard({
       </View>
 
       {sourceBadge && (
-        <View style={[styles.sourceBadge, sourceBadge === 'spotify' && styles.sourceBadgeSpotify]}>
-          <Text style={styles.sourceBadgeText}>
-            {sourceBadge === 'spotify' ? 'SP' : sourceBadge === 'apple_music' ? 'AM' : 'M'}
-          </Text>
+        <View style={styles.sourceBadge}>
+          {sourceBadge === 'spotify' ? (
+            <FontAwesome name="spotify" size={18} color="#1DB954" />
+          ) : sourceBadge === 'apple_music' ? (
+            <FontAwesome name="apple" size={18} color="#fff" />
+          ) : (
+            <Text style={styles.sourceBadgeText}>M</Text>
+          )}
         </View>
       )}
 
@@ -183,13 +188,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 8,
     right: 8,
-    backgroundColor: '#333',
-    borderRadius: 4,
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-  },
-  sourceBadgeSpotify: {
-    backgroundColor: COLORS.spotify,
   },
   sourceBadgeText: {
     color: COLORS.text,

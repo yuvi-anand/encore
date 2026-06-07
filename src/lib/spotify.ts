@@ -15,7 +15,15 @@ const discovery = {
   tokenEndpoint: 'https://accounts.spotify.com/api/token',
 };
 
-const SCOPES = ['user-top-read', 'user-follow-read', 'user-read-email'];
+const SCOPES = [
+  'user-top-read',
+  'user-follow-read',
+  'user-read-email',
+  'user-library-read',
+  'user-read-recently-played',
+  'playlist-read-private',
+  'playlist-read-collaborative',
+];
 
 export function useSpotifyAuth() {
   const [request, response, promptAsync] = AuthSession.useAuthRequest(
@@ -25,6 +33,8 @@ export function useSpotifyAuth() {
       redirectUri: REDIRECT_URI,
       responseType: AuthSession.ResponseType.Code,
       usePKCE: true,
+      // Force the consent screen so newly-added scopes actually get granted.
+      extraParams: { show_dialog: 'true' },
     },
     discovery
   );
@@ -32,7 +42,15 @@ export function useSpotifyAuth() {
   return { request, response, promptAsync };
 }
 
-export async function exchangeSpotifyCode(code: string, codeVerifier: string): Promise<string | null> {
+export interface SpotifyTokens {
+  accessToken: string;
+  refreshToken: string | null;
+}
+
+export async function exchangeSpotifyCode(
+  code: string,
+  codeVerifier: string
+): Promise<SpotifyTokens | null> {
   try {
     const res = await fetch('https://accounts.spotify.com/api/token', {
       method: 'POST',
@@ -46,12 +64,12 @@ export async function exchangeSpotifyCode(code: string, codeVerifier: string): P
       }).toString(),
     });
     if (!res.ok) {
-      const err = await res.text();
-      console.error('Spotify token exchange error:', err);
+      console.error('Spotify token exchange error:', await res.text());
       return null;
     }
     const data = await res.json();
-    return data.access_token ?? null;
+    if (!data.access_token) return null;
+    return { accessToken: data.access_token, refreshToken: data.refresh_token ?? null };
   } catch (e) {
     console.error('exchangeSpotifyCode error:', e);
     return null;
@@ -59,24 +77,253 @@ export async function exchangeSpotifyCode(code: string, codeVerifier: string): P
 }
 
 /**
- * Pulls the user's full Spotify library — top artists (all time, 6mo, recent)
- * plus everyone they follow — de-duped by spotify id. This is what populates
- * the app after connecting.
+ * Returns a usable access token, refreshing via the stored refresh token when
+ * possible (access tokens expire after ~1 hour). Calls onRefreshed so the new
+ * tokens can be persisted.
+ */
+export async function getValidSpotifyToken(
+  accessToken: string | null,
+  refreshToken: string | null,
+  onRefreshed: (tokens: SpotifyTokens) => void
+): Promise<string | null> {
+  if (refreshToken) {
+    const t = await refreshSpotifyAccessToken(refreshToken);
+    if (t) {
+      onRefreshed(t);
+      return t.accessToken;
+    }
+  }
+  return accessToken;
+}
+
+/** Exchanges a stored refresh token for a fresh access token. */
+export async function refreshSpotifyAccessToken(
+  refreshToken: string
+): Promise<SpotifyTokens | null> {
+  try {
+    const res = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: CLIENT_ID,
+      }).toString(),
+    });
+    if (!res.ok) {
+      console.error('Spotify refresh error:', await res.text());
+      return null;
+    }
+    const data = await res.json();
+    if (!data.access_token) return null;
+    // Spotify may or may not return a new refresh token.
+    return { accessToken: data.access_token, refreshToken: data.refresh_token ?? refreshToken };
+  } catch (e) {
+    console.error('refreshSpotifyAccessToken error:', e);
+    return null;
+  }
+}
+
+// Diagnostics from the most recent getLibraryArtists() call.
+export let lastImportStats = { top: 0, followed: 0, saved: 0, playlists: 0, extraIds: 0, hydrated: 0, total: 0, hydrateStatus: '' };
+
+// Captures the first failure during a library fetch, for diagnostics.
+export let lastSpotifyError = '';
+
+async function spotifyGet(url: string, token: string): Promise<any | null> {
+  try {
+    let res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    for (let i = 0; res.status === 429 && i < 3; i++) {
+      const retry = parseInt(res.headers.get('Retry-After') ?? '1', 10);
+      await new Promise((r) => setTimeout(r, (retry || 1) * 1000));
+      res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    }
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Simplified {id,name} artist refs from the user's Liked Songs. */
+async function getSavedTrackArtistRefs(token: string, maxPages = 4): Promise<{ id: string; name: string }[]> {
+  const refs: { id: string; name: string }[] = [];
+  let url: string | null = 'https://api.spotify.com/v1/me/tracks?limit=50';
+  for (let page = 0; url && page < maxPages; page++) {
+    const data: any = await spotifyGet(url, token);
+    if (!data) break;
+    for (const item of data.items ?? []) {
+      for (const a of item.track?.artists ?? []) {
+        if (a?.id) refs.push({ id: a.id, name: a.name });
+      }
+    }
+    url = data.next ?? null;
+  }
+  return refs;
+}
+
+/** Simplified artist refs from the user's playlists (capped to stay fast). */
+async function getPlaylistArtistRefs(
+  token: string,
+  maxPlaylists = 25,
+  maxTracksPerPlaylist = 100
+): Promise<{ id: string; name: string }[]> {
+  const refs: { id: string; name: string }[] = [];
+  const playlists: any = await spotifyGet(
+    `https://api.spotify.com/v1/me/playlists?limit=${maxPlaylists}`,
+    token
+  );
+  for (const pl of playlists?.items ?? []) {
+    let url: string | null = `https://api.spotify.com/v1/playlists/${pl.id}/tracks?limit=50&fields=next,items(track(artists(id,name)))`;
+    let fetched = 0;
+    while (url && fetched < maxTracksPerPlaylist) {
+      const data: any = await spotifyGet(url, token);
+      if (!data) break;
+      for (const item of data.items ?? []) {
+        for (const a of item.track?.artists ?? []) {
+          if (a?.id) refs.push({ id: a.id, name: a.name });
+        }
+      }
+      fetched += (data.items ?? []).length;
+      url = data.next ?? null;
+    }
+  }
+  return refs;
+}
+
+/** Fetches full artist objects (with genres + images) for the given ids. */
+// Spotify's batch /artists endpoint 403s for newer apps, so we enrich artists
+// via /search (by name, matched back to the known id), which works.
+async function hydrateArtists(
+  token: string,
+  refs: { id: string; name: string }[]
+): Promise<Partial<Artist>[]> {
+  const out: Partial<Artist>[] = [];
+  for (const ref of refs) {
+    if (!ref.name) continue;
+    const data: any = await spotifyGet(
+      `https://api.spotify.com/v1/search?q=${encodeURIComponent(ref.name)}&type=artist&limit=5`,
+      token
+    );
+    const items: SpotifyArtistItem[] = data?.artists?.items ?? [];
+    const match = items.find((a) => a.id === ref.id) ?? items[0];
+    if (match) out.push(normalizeSpotifyArtist(match));
+    // ~3 req/sec to stay under Spotify's rate limit (spotifyGet also retries 429).
+    await new Promise((r) => setTimeout(r, 350));
+  }
+  return out;
+}
+
+/**
+ * Pulls the user's full Spotify library — top artists (3 time ranges) and
+ * follows (full objects), plus artists from Liked Songs and playlists
+ * (hydrated to full objects). De-duped by spotify id, ranked top-first.
  */
 export async function getLibraryArtists(token: string): Promise<Partial<Artist>[]> {
-  const [topLong, topMedium, topShort, followed] = await Promise.all([
-    getTopArtists(token, 'long_term'),
-    getTopArtists(token, 'medium_term'),
-    getTopArtists(token, 'short_term'),
-    getFollowedArtists(token),
-  ]);
+  lastSpotifyError = '';
+  // Sequential, not parallel — a burst of parallel requests is what trips
+  // Spotify's rate limiter. Playlists are skipped (huge request cost, little
+  // payoff); Liked Songs covers the user's real listening.
+  const topLong = await getTopArtists(token, 'long_term');
+  const topMedium = await getTopArtists(token, 'medium_term');
+  const topShort = await getTopArtists(token, 'short_term');
+  const followed = await getFollowedArtists(token);
+  const savedRefs = await getSavedTrackArtistRefs(token);
+  const playlistRefs: { id: string; name: string }[] = [];
 
+  lastImportStats = {
+    top: topLong.length + topMedium.length + topShort.length,
+    followed: followed.length,
+    saved: savedRefs.length,
+    playlists: playlistRefs.length,
+    extraIds: 0,
+    hydrated: 0,
+    total: 0,
+    hydrateStatus: '',
+  };
+
+  // Full objects first (preserve ranking order: top long → medium → short → followed).
   const byId = new Map<string, Partial<Artist>>();
   for (const a of [...topLong, ...topMedium, ...topShort, ...followed]) {
-    const key = a.spotify_id ?? a.name ?? '';
-    if (key && !byId.has(key)) byId.set(key, a);
+    if (a.spotify_id && !byId.has(a.spotify_id)) byId.set(a.spotify_id, a);
   }
+
+  // Count how often each artist appears across saved tracks + playlists, and
+  // only keep ones that recur — this filters out one-off featured artists and
+  // random collaborators the user doesn't actually listen to.
+  const MIN_OCCURRENCES = 2;
+  const counts = new Map<string, number>();
+  const refName = new Map<string, string>();
+  for (const r of [...savedRefs, ...playlistRefs]) {
+    if (!r.id) continue;
+    counts.set(r.id, (counts.get(r.id) ?? 0) + 1);
+    if (!refName.has(r.id)) refName.set(r.id, r.name);
+  }
+
+  // Add recurring liked/playlist artists as bare entries (name + id). We do NOT
+  // hydrate images/genres here — that's slow and would hold up the import. The
+  // app backfills images/genres for these in the background afterward.
+  const extraRefs = [...counts.entries()]
+    .filter(([id, n]) => n >= MIN_OCCURRENCES && !byId.has(id))
+    .map(([id]) => ({ id, name: refName.get(id) ?? '' }));
+  for (const ref of extraRefs) {
+    byId.set(ref.id, {
+      name: ref.name,
+      spotify_id: ref.id,
+      genres: [],
+      image_url: null,
+      thumb_url: null,
+      bandsintown_id: null,
+      ticketmaster_id: null,
+      apple_music_id: null,
+    });
+  }
+
+  lastImportStats.extraIds = extraRefs.length;
+  lastImportStats.total = byId.size;
   return Array.from(byId.values());
+}
+
+/**
+ * Looks up a single artist by name via /search (the batch /artists endpoint
+ * 403s for newer apps) and returns the full object, matched back to the id.
+ */
+export async function fetchArtistByName(
+  token: string,
+  name: string,
+  spotifyId: string
+): Promise<Partial<Artist> | null> {
+  if (!name) return null;
+  const data: any = await spotifyGet(
+    `https://api.spotify.com/v1/search?q=${encodeURIComponent(name)}&type=artist&limit=5`,
+    token
+  );
+  const items: SpotifyArtistItem[] = data?.artists?.items ?? [];
+  const match = items.find((a) => a.id === spotifyId) ?? items[0];
+  return match ? normalizeSpotifyArtist(match) : null;
+}
+
+/**
+ * Artists to suggest in Discover: from the user's top tracks + recently played,
+ * hydrated to full objects. Caller filters out already-followed artists.
+ */
+export async function getSuggestedArtists(token: string): Promise<Partial<Artist>[]> {
+  const [topTracks, recent] = await Promise.all([
+    spotifyGet('https://api.spotify.com/v1/me/top/tracks?time_range=medium_term&limit=50', token),
+    spotifyGet('https://api.spotify.com/v1/me/player/recently-played?limit=50', token),
+  ]);
+
+  const refs = new Map<string, string>();
+  for (const t of topTracks?.items ?? []) {
+    for (const a of t.artists ?? []) if (a?.id && !refs.has(a.id)) refs.set(a.id, a.name);
+  }
+  for (const item of recent?.items ?? []) {
+    for (const a of item.track?.artists ?? []) if (a?.id && !refs.has(a.id)) refs.set(a.id, a.name);
+  }
+
+  // Cap to keep the per-artist search calls reasonable.
+  const refList = [...refs.entries()].slice(0, 40).map(([id, name]) => ({ id, name }));
+  return hydrateArtists(token, refList);
 }
 
 function normalizeSpotifyArtist(item: SpotifyArtistItem): Partial<Artist> {
@@ -108,7 +355,11 @@ export async function getTopArtists(
       `https://api.spotify.com/v1/me/top/artists?time_range=${timeRange}&limit=50`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
-    if (!res.ok) throw new Error(`Spotify top artists error: ${res.status}`);
+    if (!res.ok) {
+      const body = await res.text();
+      lastSpotifyError = `top ${res.status}: ${body.slice(0, 80)}`;
+      throw new Error(`Spotify top artists error: ${res.status}`);
+    }
     const data = await res.json();
     return (data.items as SpotifyArtistItem[]).map(normalizeSpotifyArtist);
   } catch (error) {

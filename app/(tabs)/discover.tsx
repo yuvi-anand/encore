@@ -12,6 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { useAuth } from '../../src/hooks/useAuth';
 import { useArtists } from '../../src/hooks/useArtists';
+import { supabase } from '../../src/lib/supabase';
 import { ArtistCard } from '../../src/components/ArtistCard';
 import { GenreFilter } from '../../src/components/GenreFilter';
 import { searchArtists as searchSpotify, getSuggestedArtists } from '../../src/lib/spotify';
@@ -39,6 +40,8 @@ export default function DiscoverScreen() {
   const [adding, setAdding] = useState<Set<string>>(new Set());
   const [selectedGenre, setSelectedGenre] = useState<Genre | null>(null);
   const [suggestions, setSuggestions] = useState<Partial<Artist>[]>([]);
+  const [genreArtists, setGenreArtists] = useState<Record<string, Partial<Artist>[]>>({});
+  const [loadingGenre, setLoadingGenre] = useState(false);
   // Monotonic id so a slow earlier response can't overwrite a newer query's.
   const reqId = useRef(0);
 
@@ -54,6 +57,37 @@ export default function DiscoverScreen() {
       active = false;
     };
   }, [profile?.spotify_token]);
+
+  // Load top artists for a genre when its tab is tapped — straight from the DB
+  // (server-seeded), so NO Spotify call and no rate limit. Cached per genre.
+  useEffect(() => {
+    if (!selectedGenre || genreArtists[selectedGenre]) return;
+    let active = true;
+    setLoadingGenre(true);
+    supabase
+      .from('genre_artists')
+      .select('spotify_id, name, image_url, thumb_url, genres')
+      .eq('genre', selectedGenre)
+      .order('rank', { ascending: true })
+      .then(({ data }) => {
+        if (!active) return;
+        const rows = (data ?? []).map((a: any) => ({
+          spotify_id: a.spotify_id,
+          name: a.name,
+          image_url: a.image_url,
+          thumb_url: a.thumb_url,
+          genres: a.genres ?? [],
+          bandsintown_id: null,
+          ticketmaster_id: null,
+          apple_music_id: null,
+        })) as Partial<Artist>[];
+        setGenreArtists((prev) => ({ ...prev, [selectedGenre]: rows }));
+        setLoadingGenre(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedGenre]);
 
   // Track which artists are already followed by name (covers all sources).
   const followingNames = useMemo(
@@ -123,19 +157,27 @@ export default function DiscoverScreen() {
   );
 
   const pairs: Partial<Artist>[][] = useMemo(() => {
-    const base = hasQuery ? results : suggestionsFiltered;
-    // Genre pills filter SEARCH results only; the suggestion feed is shown as-is
-    // (Spotify rarely returns genres, so filtering it would just blank it out).
-    const src =
-      hasQuery && selectedGenre
-        ? base.filter((a) => artistMatchesGenre(a.genres, selectedGenre))
-        : base;
+    let src: Partial<Artist>[];
+    if (hasQuery) {
+      // Searching: optionally narrow results by the selected genre.
+      src = selectedGenre
+        ? results.filter((a) => artistMatchesGenre(a.genres, selectedGenre))
+        : results;
+    } else if (selectedGenre) {
+      // Genre tab: top artists in that genre, minus ones already followed.
+      src = (genreArtists[selectedGenre] ?? []).filter(
+        (a) => !followingNames.has(a.name?.toLowerCase() ?? '')
+      );
+    } else {
+      // "All": personalized suggestions.
+      src = suggestionsFiltered;
+    }
     const rows: Partial<Artist>[][] = [];
     for (let i = 0; i < src.length; i += 2) {
       rows.push(src.slice(i, i + 2));
     }
     return rows;
-  }, [hasQuery, results, suggestionsFiltered, selectedGenre]);
+  }, [hasQuery, results, suggestionsFiltered, selectedGenre, genreArtists, followingNames]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -172,12 +214,20 @@ export default function DiscoverScreen() {
         </View>
       )}
 
-      {/* Suggestions header when idle. */}
-      {!hasQuery && suggestionsFiltered.length > 0 && (
-        <Text style={styles.sectionTitle}>Suggested for you</Text>
+      {/* Section header when idle. */}
+      {!hasQuery && (
+        <Text style={styles.sectionTitle}>
+          {selectedGenre ? `Top ${selectedGenre} artists` : 'Suggested for you'}
+        </Text>
       )}
 
-      {!hasQuery && suggestionsFiltered.length === 0 && (
+      {!hasQuery && selectedGenre && loadingGenre && !genreArtists[selectedGenre] && (
+        <View style={styles.loadingRow}>
+          <ActivityIndicator color={COLORS.accent} />
+        </View>
+      )}
+
+      {!hasQuery && !selectedGenre && suggestionsFiltered.length === 0 && (
         <View style={styles.empty}>
           <Text style={styles.emptyText}>
             {profile?.spotify_token

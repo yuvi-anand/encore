@@ -348,6 +348,36 @@ export async function fetchArtistsByIds(
   return out;
 }
 
+/**
+ * Top artists within a genre via Spotify's `genre:` search filter, with a plain
+ * keyword fallback. On-demand (one call per genre tab, cached by the caller),
+ * so it stays well within rate limits. Results include images + genres.
+ */
+export async function searchArtistsByGenre(
+  token: string,
+  genreTerm: string
+): Promise<Partial<Artist>[]> {
+  const q = genreTerm.includes(' ') ? `genre:"${genreTerm}"` : `genre:${genreTerm}`;
+  let data: any = await spotifyGet(
+    `https://api.spotify.com/v1/search?q=${encodeURIComponent(q)}&type=artist&limit=25`,
+    token
+  );
+  let items: SpotifyArtistItem[] = data?.artists?.items ?? [];
+  const genreCount = items.length;
+  let fallbackCount = -1;
+  if (items.length === 0) {
+    // Fallback: plain keyword search if the genre filter returns nothing.
+    data = await spotifyGet(
+      `https://api.spotify.com/v1/search?q=${encodeURIComponent(genreTerm)}&type=artist&limit=25`,
+      token
+    );
+    items = data?.artists?.items ?? [];
+    fallbackCount = items.length;
+  }
+  console.log(`[GenreSearch] ${genreTerm} genre:${genreCount} fallback:${fallbackCount} status:${lastSpotifyStatus || 'ok'}`);
+  return items.map(normalizeSpotifyArtist);
+}
+
 export async function getSuggestedArtists(token: string): Promise<Partial<Artist>[]> {
   const [topTracks, recent] = await Promise.all([
     spotifyGet('https://api.spotify.com/v1/me/top/tracks?time_range=medium_term&limit=50', token),

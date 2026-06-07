@@ -5,6 +5,21 @@
 -- 0. Spotify refresh token (for background library re-sync) ------------------
 alter table profiles add column if not exists spotify_refresh_token text;
 
+-- 0b. Genre artists (server-seeded top artists per genre for Discover) --------
+create table if not exists genre_artists (
+  genre text not null,
+  spotify_id text not null,
+  name text not null,
+  image_url text,
+  thumb_url text,
+  genres text[] default '{}',
+  rank int default 0,
+  primary key (genre, spotify_id)
+);
+alter table genre_artists enable row level security;
+drop policy if exists "genre_artists are public" on genre_artists;
+create policy "genre_artists are public" on genre_artists for select using (true);
+
 -- 1. Account deletion -------------------------------------------------------
 -- SECURITY DEFINER so an authenticated user can delete *their own* account
 -- (profile data cascades via FKs, then the auth row).

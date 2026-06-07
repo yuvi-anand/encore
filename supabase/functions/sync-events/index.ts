@@ -157,34 +157,40 @@ Deno.serve(async () => {
     followersByArtist.set(l.artist_id, arr);
   }
 
+  // One announcement per artist that has new events this run — NOT per city.
+  // We notify regardless of location ("your artist is touring"); finding a
+  // nearby date is what the app is for. Use the earliest new event per artist
+  // as the representative for dedupe/deeplink.
+  const repByArtist = new Map<string, any>();
+  for (const ev of newEvents ?? []) {
+    const cur = repByArtist.get(ev.artist_id);
+    if (!cur || new Date(ev.event_date) < new Date(cur.event_date)) {
+      repByArtist.set(ev.artist_id, ev);
+    }
+  }
+
+  // Artist names for the messages.
+  const artistIdsWithNews = [...repByArtist.keys()];
+  const { data: artistRows } = await supabase
+    .from('artists')
+    .select('id, name')
+    .in('id', artistIdsWithNews);
+  const nameById = new Map((artistRows ?? []).map((a) => [a.id, a.name]));
+
   const messages: any[] = [];
   const logRows: { user_id: string; event_id: string }[] = [];
 
-  for (const ev of newEvents ?? []) {
-    if (ev.venue_lat == null || ev.venue_lng == null) continue;
-    const followers = followersByArtist.get(ev.artist_id) ?? [];
+  for (const [artistId, ev] of repByArtist) {
+    const artistName = nameById.get(artistId) ?? 'An artist you follow';
+    const followers = followersByArtist.get(artistId) ?? [];
     for (const uid of followers) {
       const p = (profiles ?? []).find((x) => x.id === uid);
       if (!p?.push_token || p.notify_announcements === false) continue;
-      const homes = (p.home_cities ?? []).filter((c: any) => c.lat || c.lng);
-      const radius = p.notification_radius_miles ?? 50;
-      const inRange = homes.some(
-        (c: any) => distanceMiles(c.lat, c.lng, ev.venue_lat, ev.venue_lng) <= radius
-      );
-      if (!inRange) continue;
-
-      const { data: artistRow } = await supabase
-        .from('artists')
-        .select('name')
-        .eq('id', ev.artist_id)
-        .single();
-      const artistName = artistRow?.name ?? 'An artist you follow';
-
       messages.push({
         to: p.push_token,
-        title: `${artistName} just announced a show`,
-        body: `${ev.venue_city ? `${ev.venue_city} — ` : ''}tap for tickets and details.`,
-        data: { eventId: ev.id, artistId: ev.artist_id },
+        title: `${artistName} just announced tour dates`,
+        body: 'Tap to see where they’re playing.',
+        data: { eventId: ev.id, artistId },
         sound: 'default',
       });
       logRows.push({ user_id: uid, event_id: ev.id });

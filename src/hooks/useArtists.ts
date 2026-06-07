@@ -327,8 +327,9 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
               })
               .eq('id', a.id);
             updated += 1;
+            if (updated % 25 === 0) await fetchArtists();
           }
-          await new Promise((r) => setTimeout(r, 350));
+          // (Throttling handled globally by the gate in spotifyGet.)
         }
         if (updated > 0) await fetchArtists();
       } catch (e) {
@@ -351,8 +352,10 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
         if (userId) {
           await AsyncStorage.setItem(`encore:lastSync:${userId}`, String(Date.now()));
         }
-        // Enrich the bare (Liked Songs/playlist) artists in the background.
-        void backfillImages(token);
+        // Enrich the bare (Liked Songs/playlist) artists in the background,
+        // delayed so user-facing fetches (suggestions, genre tabs) get the
+        // shared request queue first.
+        setTimeout(() => void backfillImages(token), 15000);
         return count;
       } finally {
         syncingRef.current = false;
@@ -376,10 +379,9 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
 
     (async () => {
       try {
-        const key = `encore:lastSync:${userId}`;
-        const last = await AsyncStorage.getItem(key);
-        if (last && Date.now() - parseInt(last, 10) < SYNC_INTERVAL_MS) return;
-
+        // Always refresh the access token on open so /search-backed features
+        // (suggestions, search enrichment) keep working — access tokens expire
+        // after ~1h. This must NOT be gated by the sync throttle.
         const token = await getValidSpotifyToken(accessToken, refreshToken, (t) =>
           updateProfile({
             spotify_token: t.accessToken,
@@ -387,7 +389,13 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
           })
         );
         if (!token) return;
-        await syncLibrary(token, 'merge');
+
+        // Full library re-sync only every 12h.
+        const key = `encore:lastSync:${userId}`;
+        const last = await AsyncStorage.getItem(key);
+        if (!last || Date.now() - parseInt(last, 10) >= SYNC_INTERVAL_MS) {
+          await syncLibrary(token, 'merge');
+        }
       } catch (e) {
         console.error('background spotify sync error:', e);
       }

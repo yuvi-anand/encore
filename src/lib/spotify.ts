@@ -130,17 +130,38 @@ export let lastImportStats = { top: 0, followed: 0, saved: 0, playlists: 0, extr
 // Captures the first failure during a library fetch, for diagnostics.
 export let lastSpotifyError = '';
 
+// Global request gate: serializes EVERY Spotify GET through one chain spaced
+// ~280ms apart, so no combination of features (backfill + suggestions + genre)
+// can burst past Spotify's rate limit and starve each other into empty results.
+let spotifyGate: Promise<void> = Promise.resolve();
+function gate(): Promise<void> {
+  const next = spotifyGate.then(() => new Promise<void>((r) => setTimeout(r, 280)));
+  spotifyGate = next;
+  return next;
+}
+
+// Last non-OK HTTP status seen, for diagnostics.
+export let lastSpotifyStatus = '';
+
 async function spotifyGet(url: string, token: string): Promise<any | null> {
   try {
+    await gate();
     let res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    for (let i = 0; res.status === 429 && i < 3; i++) {
+    // Retry on 429, but NEVER wait on a long cooldown — if Spotify says wait
+    // more than a couple seconds, fail fast so we don't hang the whole app.
+    for (let i = 0; res.status === 429 && i < 2; i++) {
       const retry = parseInt(res.headers.get('Retry-After') ?? '1', 10);
+      if (retry > 3) break; // long rate-limit cooldown — give up immediately
       await new Promise((r) => setTimeout(r, (retry || 1) * 1000));
       res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     }
-    if (!res.ok) return null;
+    if (!res.ok) {
+      lastSpotifyStatus = `${res.status} ${url.split('/v1/')[1]?.split('?')[0] ?? ''}`;
+      return null;
+    }
     return await res.json();
-  } catch {
+  } catch (e: any) {
+    lastSpotifyStatus = `err ${e?.message ?? e}`;
     return null;
   }
 }
@@ -208,8 +229,7 @@ async function hydrateArtists(
     const items: SpotifyArtistItem[] = data?.artists?.items ?? [];
     const match = items.find((a) => a.id === ref.id) ?? items[0];
     if (match) out.push(normalizeSpotifyArtist(match));
-    // ~3 req/sec to stay under Spotify's rate limit (spotifyGet also retries 429).
-    await new Promise((r) => setTimeout(r, 350));
+    // (Throttling handled globally by the gate in spotifyGet.)
   }
   return out;
 }
@@ -307,6 +327,27 @@ export async function fetchArtistByName(
  * Artists to suggest in Discover: from the user's top tracks + recently played,
  * hydrated to full objects. Caller filters out already-followed artists.
  */
+/**
+ * Batch-fetches full artist objects (photos + genres) in one call per 50 ids
+ * via /artists. Far cheaper than per-artist /search. Returns [] if the endpoint
+ * is unavailable (some apps get 403) so the caller can fall back.
+ */
+export async function fetchArtistsByIds(
+  token: string,
+  ids: string[]
+): Promise<Partial<Artist>[]> {
+  const out: Partial<Artist>[] = [];
+  for (let i = 0; i < ids.length; i += 50) {
+    const batch = ids.slice(i, i + 50);
+    const data: any = await spotifyGet(
+      `https://api.spotify.com/v1/artists?ids=${batch.join(',')}`,
+      token
+    );
+    for (const a of data?.artists ?? []) if (a) out.push(normalizeSpotifyArtist(a));
+  }
+  return out;
+}
+
 export async function getSuggestedArtists(token: string): Promise<Partial<Artist>[]> {
   const [topTracks, recent] = await Promise.all([
     spotifyGet('https://api.spotify.com/v1/me/top/tracks?time_range=medium_term&limit=50', token),
@@ -321,9 +362,18 @@ export async function getSuggestedArtists(token: string): Promise<Partial<Artist
     for (const a of item.track?.artists ?? []) if (a?.id && !refs.has(a.id)) refs.set(a.id, a.name);
   }
 
-  // Cap to keep the per-artist search calls reasonable.
-  const refList = [...refs.entries()].slice(0, 40).map(([id, name]) => ({ id, name }));
-  return hydrateArtists(token, refList);
+  // Bare entries (name + id); real artist photos are loaded by the caller.
+  const result: Partial<Artist>[] = [...refs.entries()].slice(0, 40).map(([id, name]) => ({
+    name,
+    spotify_id: id,
+    genres: [],
+    image_url: null,
+    thumb_url: null,
+    bandsintown_id: null,
+    ticketmaster_id: null,
+    apple_music_id: null,
+  }));
+  return result;
 }
 
 function normalizeSpotifyArtist(item: SpotifyArtistItem): Partial<Artist> {

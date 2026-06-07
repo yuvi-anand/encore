@@ -124,9 +124,12 @@ export default function DiscoverScreen() {
 
   const pairs: Partial<Artist>[][] = useMemo(() => {
     const base = hasQuery ? results : suggestionsFiltered;
-    const src = selectedGenre
-      ? base.filter((a) => artistMatchesGenre(a.genres, selectedGenre))
-      : base;
+    // Genre pills filter SEARCH results only; the suggestion feed is shown as-is
+    // (Spotify rarely returns genres, so filtering it would just blank it out).
+    const src =
+      hasQuery && selectedGenre
+        ? base.filter((a) => artistMatchesGenre(a.genres, selectedGenre))
+        : base;
     const rows: Partial<Artist>[][] = [];
     for (let i = 0; i < src.length; i += 2) {
       rows.push(src.slice(i, i + 2));

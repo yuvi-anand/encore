@@ -1,6 +1,8 @@
 # Encore — TODO
 
 ## Next up
+- [ ] **Concert badges and tracking** — let users mark shows they've attended,
+      track concert history, and earn badges/milestones.
 - [ ] **Genre-filtered suggestions** in Discover — show top suggested artists per
       genre. Spotify `genre:` search works but returns "popular in genre" (not
       personalized) and adds `/search` load; needs careful throttling/caching so

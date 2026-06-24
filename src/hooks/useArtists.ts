@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
-import { Artist, UserArtist } from '../types';
+import { Artist, UserArtist, ArtistSource } from '../types';
 import { useAuth } from './useAuth';
 import { getValidSpotifyToken, getLibraryArtists, fetchArtistByName } from '../lib/spotify';
 

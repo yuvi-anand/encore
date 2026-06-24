@@ -41,6 +41,7 @@ export interface Profile {
   spotify_token: string | null;
   spotify_refresh_token: string | null;
   apple_music_token: string | null;
+  lastfm_username: string | null;
   created_at: string;
 }
 
@@ -77,10 +78,12 @@ export interface Event {
   artist?: Artist;
 }
 
+export type ArtistSource = 'spotify' | 'apple_music' | 'manual' | 'lastfm';
+
 export interface UserArtist {
   user_id: string;
   artist_id: string;
-  source: 'spotify' | 'apple_music' | 'manual';
+  source: ArtistSource;
   added_at: string;
   /** Personal listening rank from Spotify (0 = most listened). Null if unknown. */
   rank: number | null;

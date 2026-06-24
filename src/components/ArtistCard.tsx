@@ -7,14 +7,14 @@ import {
   StyleSheet,
 } from 'react-native';
 import { FontAwesome } from '@expo/vector-icons';
-import { Artist } from '../types';
+import { Artist, ArtistSource } from '../types';
 
 interface ArtistCardProps {
   artist: Artist;
   onPress?: () => void;
   onRemove?: () => void;
   size?: 'sm' | 'md';
-  sourceBadge?: 'spotify' | 'apple_music' | 'manual' | null;
+  sourceBadge?: ArtistSource | null;
   isFollowing?: boolean;
   onAdd?: () => void;
   /** Visual selected state (used for multi-select like onboarding). */

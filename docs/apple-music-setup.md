@@ -12,25 +12,17 @@ A JWT signed with an Apple private key. Same for every user, valid up to 6 month
 1. [developer.apple.com](https://developer.apple.com/account) → **Certificates, Identifiers & Profiles** → **Keys** → **+**
 2. Name it (e.g. "Encore MusicKit"), check **MusicKit**, **Continue** → **Register**.
 3. **Download the `.p8` key** (one-time download). Note the **Key ID** and your **Team ID** (top-right of the portal).
-4. Generate the JWT with this script (`node scripts/gen-apple-token.mjs`):
+4. Generate the JWT with the included script (dependency-free, Node 16+):
 
-```js
-// scripts/gen-apple-token.mjs  —  run: node scripts/gen-apple-token.mjs
-import fs from 'node:fs';
-import jwt from 'jsonwebtoken'; // npm i -D jsonwebtoken
-
-const TEAM_ID = 'XXXXXXXXXX';        // your Apple Team ID
-const KEY_ID  = 'YYYYYYYYYY';        // the MusicKit Key ID
-const PRIVATE_KEY = fs.readFileSync('./AuthKey_YYYYYYYYYY.p8').toString();
-
-const token = jwt.sign({}, PRIVATE_KEY, {
-  algorithm: 'ES256',
-  expiresIn: '180d',
-  issuer: TEAM_ID,
-  header: { alg: 'ES256', kid: KEY_ID },
-});
-console.log(token);
+```bash
+APPLE_TEAM_ID=XXXXXXXXXX \
+APPLE_KEY_ID=YYYYYYYYYY \
+APPLE_P8_PATH=./AuthKey_YYYYYYYYYY.p8 \
+node scripts/gen-apple-token.mjs
 ```
+
+   (`XXXXXXXXXX` = your Apple Team ID, `YYYYYYYYYY` = the MusicKit Key ID, and
+   the `.p8` path is the key file you downloaded.) It prints the token to stdout.
 
 5. Put the output in `.env` as `EXPO_PUBLIC_APPLE_MUSIC_DEVELOPER_TOKEN=...`, and add it to EAS:
    `npx eas env:create --environment preview --name EXPO_PUBLIC_APPLE_MUSIC_DEVELOPER_TOKEN --value "<token>" --visibility sensitive --type string --force`

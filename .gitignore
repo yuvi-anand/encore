@@ -30,3 +30,6 @@ yarn-error.*
 
 # misc
 *.log
+
+# supabase CLI cache
+supabase/.temp/

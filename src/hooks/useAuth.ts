@@ -138,6 +138,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .from('profiles')
         .update({ spotify_token: providerToken, spotify_refresh_token: providerRefresh ?? null })
         .eq('id', sessionData.session.user.id);
+      // Reflect the tokens in local state immediately so Settings shows the
+      // connection and the background library import (which keys off
+      // profile.spotify_token) fires now instead of waiting for an app restart.
+      const refreshed = await ensureProfile(sessionData.session.user.id);
+      if (refreshed) setProfile(refreshed);
     }
     return null;
   }, []);

@@ -110,35 +110,85 @@ async function sendPush(messages: any[]) {
 
 // ---- main ----------------------------------------------------------------
 
-Deno.serve(async () => {
+Deno.serve(async (req) => {
+  // Dry run (?dry=1): compute exactly what WOULD be pushed and return it without
+  // sending or logging anything. Used to verify the run is sane before going live.
+  const dryRun = new URL(req.url).searchParams.get('dry') === '1';
+
   // 1. All artists any user follows.
-  const { data: links } = await supabase.from('user_artists').select('user_id, artist_id');
+  const { data: links } = await supabase.from('user_artists').select('user_id, artist_id, added_at');
   const artistIds = [...new Set((links ?? []).map((l) => l.artist_id))];
   if (artistIds.length === 0) return new Response(JSON.stringify({ ok: true, new: 0 }));
 
   const { data: artists } = await supabase.from('artists').select('id, name').in('id', artistIds);
 
-  // 2. Which Ticketmaster events do we already know about?
-  const { data: existing } = await supabase
-    .from('events')
-    .select('ticketmaster_id')
-    .not('ticketmaster_id', 'is', null);
-  const knownIds = new Set((existing ?? []).map((e) => e.ticketmaster_id));
+  // 2. Which shows do we already know about? Key off ticketmaster_id — it's the
+  // unique, stable identity of a Ticketmaster event. (An artist+date+city key
+  // breaks because one TM event can match multiple artists, so the stored
+  // artist_id differs from the one we're searching and the show looks new forever.)
+  // PostgREST caps a single response at 1000 rows and this table is well past
+  // that, so page through ALL of them with a stable order — otherwise shows
+  // beyond row 1000 look brand-new on every run (the real flood engine).
+  const existing: { artist_id: string; ticketmaster_id: string | null }[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase
+      .from('events')
+      .select('artist_id, ticketmaster_id')
+      .order('id', { ascending: true })
+      .range(from, from + 999);
+    if (error) {
+      console.error('existing load error:', error);
+      break;
+    }
+    existing.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
+  const knownIds = new Set(existing.map((e) => e.ticketmaster_id).filter(Boolean));
+  const existingLoaded = existing.length;
+  const newFetched: { tm: string; d: string | null; c: string | null }[] = [];
+  // Artists we've synced at least once before. The FIRST time we ever sync an
+  // artist we store its shows as a silent baseline and never notify about them —
+  // those tours already existed, they are not new announcements. This is what
+  // stops a fresh library import from firing one notification per artist at once.
+  const artistsWithPriorEvents = new Set((existing ?? []).map((e) => e.artist_id));
 
-  // 3. Fetch + store; collect the brand-new ticketmaster ids.
+  // 3. Fetch + store; collect genuinely-new shows by ticketmaster_id.
   const newTmIds = new Set<string>();
+  let upsertErr: string | null = null;
   for (const artist of artists ?? []) {
     const evs = await fetchArtistEvents(artist.name, artist.id);
     if (evs.length === 0) continue;
     const deduped = new Map<string, any>();
     for (const e of evs) deduped.set(e.ticketmaster_id, e);
     const rows = [...deduped.values()];
-    await supabase.from('events').upsert(rows, { onConflict: 'ticketmaster_id' });
-    for (const e of rows) if (!knownIds.has(e.ticketmaster_id)) newTmIds.add(e.ticketmaster_id);
+    const { error: upErr } = await supabase.from('events').upsert(rows, { onConflict: 'ticketmaster_id' });
+    if (upErr && !upsertErr) upsertErr = `${artist.name}: ${upErr.message}`;
+    // Only an artist we've seen before can produce "new" (notifiable) shows.
+    // First-time artists are baselined silently by the upsert above.
+    if (artistsWithPriorEvents.has(artist.id)) {
+      for (const e of rows) {
+        if (!knownIds.has(e.ticketmaster_id)) {
+          newTmIds.add(e.ticketmaster_id);
+          if (newFetched.length < 12)
+            newFetched.push({ tm: e.ticketmaster_id, d: e.event_date, c: e.venue_city });
+          knownIds.add(e.ticketmaster_id); // don't double-count within this run
+        }
+      }
+    }
     await new Promise((r) => setTimeout(r, 200)); // gentle throttle
   }
 
-  if (newTmIds.size === 0) return new Response(JSON.stringify({ ok: true, new: 0 }));
+  // Master on/off for announcement pushes. While false, the real cron (no ?dry)
+  // sends nothing, but ?dry=1 still runs the full pipeline so we can verify it
+  // before going live.
+  const NOTIFY_ENABLED = true;
+  if (!NOTIFY_ENABLED && !dryRun) {
+    return new Response(JSON.stringify({ ok: true, new: newTmIds.size, pushed: 0, notify: 'disabled' }));
+  }
+
+  if (newTmIds.size === 0) {
+    return new Response(JSON.stringify({ ok: true, new: 0, wouldSend: 0, dryRun }));
+  }
 
   // 4. Load the new events (with their DB ids) and the data needed to target users.
   const { data: newEvents } = await supabase
@@ -151,10 +201,15 @@ Deno.serve(async () => {
     .select('id, push_token, notify_announcements, notification_radius_miles, home_cities');
 
   const followersByArtist = new Map<string, string[]>();
+  const addedAtByKey = new Map<string, number>();
   for (const l of links ?? []) {
     const arr = followersByArtist.get(l.artist_id) ?? [];
     arr.push(l.user_id);
     followersByArtist.set(l.artist_id, arr);
+    addedAtByKey.set(
+      `${l.user_id}:${l.artist_id}`,
+      (l as any).added_at ? new Date((l as any).added_at).getTime() : 0
+    );
   }
 
   // One announcement per artist that has new events this run — NOT per city.
@@ -180,12 +235,31 @@ Deno.serve(async () => {
   const messages: any[] = [];
   const logRows: { user_id: string; event_id: string }[] = [];
 
+  // Hard safety backstop: no single user can receive more than this many
+  // announcements in one run, so a bad data day can never become a flood again.
+  const MAX_PER_USER = 3;
+  const perUserCount = new Map<string, number>();
+
+  // Settle window: never notify a user about an artist's shows until this long
+  // after they followed. The initial library sync (and Ticketmaster trickling in
+  // late shows over the next few runs) all lands inside this window and stays
+  // silent — only genuinely new announcements, which arrive much later, notify.
+  const SETTLE_MS = 24 * 60 * 60 * 1000;
+
   for (const [artistId, ev] of repByArtist) {
     const artistName = nameById.get(artistId) ?? 'An artist you follow';
     const followers = followersByArtist.get(artistId) ?? [];
     for (const uid of followers) {
       const p = (profiles ?? []).find((x) => x.id === uid);
       if (!p?.push_token || p.notify_announcements === false) continue;
+      // Never notify about a show discovered within the settle window after the
+      // user followed the artist — that's the initial import (and its late
+      // stragglers), not a new announcement for them.
+      const addedAt = addedAtByKey.get(`${uid}:${artistId}`) ?? 0;
+      if (addedAt === 0 || new Date(ev.created_at).getTime() <= addedAt + SETTLE_MS) continue;
+      const count = perUserCount.get(uid) ?? 0;
+      if (count >= MAX_PER_USER) continue;
+      perUserCount.set(uid, count + 1);
       messages.push({
         to: p.push_token,
         title: `${artistName} just announced tour dates`,
@@ -218,6 +292,23 @@ Deno.serve(async () => {
       }
     });
 
+    if (dryRun) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          dryRun: true,
+          new: newTmIds.size,
+          wouldSend: toSend.length,
+          perUser: Object.fromEntries(perUserCount),
+          sample: toSend.slice(0, 8).map((m) => m.title),
+          existingLoaded,
+          knownIdCount: knownIds.size,
+          upsertErr,
+          newFetched,
+        })
+      );
+    }
+
     if (toSend.length > 0) {
       await sendPush(toSend);
       await supabase.from('notification_log').upsert(toLog, { onConflict: 'user_id,event_id' });
@@ -226,5 +317,5 @@ Deno.serve(async () => {
     return new Response(JSON.stringify({ ok: true, new: newTmIds.size, pushed: toSend.length }));
   }
 
-  return new Response(JSON.stringify({ ok: true, new: newTmIds.size, pushed: 0 }));
+  return new Response(JSON.stringify({ ok: true, new: newTmIds.size, pushed: 0, wouldSend: 0, dryRun }));
 });

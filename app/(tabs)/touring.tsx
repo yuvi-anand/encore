@@ -116,10 +116,13 @@ export default function TouringScreen() {
         }
       }
 
+      // Everything on the card must describe ONE show — the nearest to home if
+      // we can compute distance, otherwise the soonest. Mixing the soonest
+      // show's date with the nearest show's city was the bug.
       const display = nearest ?? sorted[0];
       result.push({
         artist,
-        nextDate: sorted[0].event_date,
+        nextDate: display.event_date,
         nearestCity: display.venue_city,
         nearestState: display.venue_state,
         nearestDistance: nearestDistance != null ? Math.round(nearestDistance) : null,

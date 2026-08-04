@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import { Artist, UserArtist, ArtistSource } from '../types';
 import { useAuth } from './useAuth';
 import { getValidSpotifyToken, getLibraryArtists, fetchArtistByName } from '../lib/spotify';
+import { getLastfmTopArtists } from '../lib/lastfm';
 
 const SYNC_INTERVAL_MS = 12 * 60 * 60 * 1000; // re-sync at most every 12h
 
@@ -14,16 +15,18 @@ interface ArtistsContextValue {
   loading: boolean;
   addArtist: (
     artistData: Partial<Artist>,
-    source: 'spotify' | 'apple_music' | 'manual'
+    source: ArtistSource
   ) => Promise<void>;
   importArtists: (
     artists: Partial<Artist>[],
-    source: 'spotify' | 'apple_music' | 'manual',
+    source: ArtistSource,
     mode?: 'replace' | 'merge'
   ) => Promise<number>;
   removeArtist: (artistId: string) => Promise<void>;
   /** Fetches the Spotify library and imports it, guarded so only one runs at a time. */
   syncLibrary: (token: string, mode?: 'replace' | 'merge') => Promise<number>;
+  /** Fetches a Last.fm user's top artists and imports them. */
+  syncLastfm: (username: string, mode?: 'replace' | 'merge') => Promise<number>;
   refetch: () => Promise<void>;
 }
 
@@ -41,6 +44,7 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
   // session — refreshing the token mutates the profile, so without this the
   // effect would retrigger itself in an infinite loop.
   const autoSyncedRef = useRef<string>('');
+  const lastfmSyncedRef = useRef<string>('');
   const backfillingRef = useRef(false);
 
   const fetchArtists = useCallback(async () => {
@@ -73,7 +77,7 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
   const addArtist = useCallback(
     async (
       artistData: Partial<Artist>,
-      source: 'spotify' | 'apple_music' | 'manual'
+      source: ArtistSource
     ) => {
       if (!userId) return;
 
@@ -156,7 +160,7 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
   const importArtists = useCallback(
     async (
       artists: Partial<Artist>[],
-      source: 'spotify' | 'apple_music' | 'manual',
+      source: ArtistSource,
       mode: 'replace' | 'merge' = 'replace'
     ): Promise<number> => {
       if (!userId || artists.length === 0) return 0;
@@ -364,6 +368,24 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
     [userId, importArtists]
   );
 
+  // Last.fm has no OAuth — a public username is enough to read listening data.
+  // Fetches the user's top artists (name-only) and imports them; the shared
+  // guard keeps it from colliding with a Spotify sync.
+  const syncLastfm = useCallback(
+    async (username: string, mode: 'replace' | 'merge' = 'replace'): Promise<number> => {
+      if (syncingRef.current) return 0;
+      syncingRef.current = true;
+      try {
+        const artists = await getLastfmTopArtists(username);
+        if (artists.length === 0) return 0;
+        return await importArtists(artists, 'lastfm', mode);
+      } finally {
+        syncingRef.current = false;
+      }
+    },
+    [importArtists]
+  );
+
   // Background re-sync: as listening habits evolve, pull the latest Spotify
   // library on app open (throttled), ADD any new artists, re-rank, and never
   // remove existing ones. Requires a stored refresh token.
@@ -403,6 +425,30 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, profile?.spotify_token]);
 
+  // Background Last.fm re-sync on app open (throttled to every 12h). Same
+  // philosophy as Spotify: ADD newly-listened artists, never remove.
+  useEffect(() => {
+    if (!userId || !profile?.lastfm_username) return;
+    const key = `${userId}:${profile.lastfm_username}`;
+    if (lastfmSyncedRef.current === key) return;
+    lastfmSyncedRef.current = key;
+    const username = profile.lastfm_username;
+
+    (async () => {
+      try {
+        const storageKey = `encore:lastSyncLastfm:${userId}`;
+        const last = await AsyncStorage.getItem(storageKey);
+        if (!last || Date.now() - parseInt(last, 10) >= SYNC_INTERVAL_MS) {
+          await syncLastfm(username, 'merge');
+          await AsyncStorage.setItem(storageKey, String(Date.now()));
+        }
+      } catch (e) {
+        console.error('background lastfm sync error:', e);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, profile?.lastfm_username]);
+
   const value: ArtistsContextValue = {
     userArtists,
     loading,
@@ -410,6 +456,7 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
     importArtists,
     removeArtist,
     syncLibrary,
+    syncLastfm,
     refetch: fetchArtists,
   };
 

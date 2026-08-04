@@ -18,6 +18,7 @@ import { useAuth } from '../../src/hooks/useAuth';
 import { useArtists } from '../../src/hooks/useArtists';
 import { CityChip } from '../../src/components/CityChip';
 import { useSpotifyAuth, exchangeSpotifyCode, lastSpotifyError } from '../../src/lib/spotify';
+import { lastfmUserExists } from '../../src/lib/lastfm';
 import { geocodeCity } from '../../src/lib/geocode';
 import { sendTestNotification, sendLocalNotification } from '../../src/lib/notifications';
 import { HomeCity } from '../../src/types';
@@ -61,9 +62,10 @@ function SettingsRow({
 
 export default function SettingsScreen() {
   const { user, profile, updateProfile } = useAuth();
-  const { syncLibrary } = useArtists();
+  const { syncLibrary, syncLastfm } = useArtists();
   const [cityInput, setCityInput] = useState('');
   const [connectingSpotify, setConnectingSpotify] = useState(false);
+  const [connectingLastfm, setConnectingLastfm] = useState(false);
 
   const homeCities: HomeCity[] = profile?.home_cities ?? [];
   const radius = profile?.notification_radius_miles ?? 50;
@@ -168,6 +170,69 @@ export default function SettingsScreen() {
     );
   };
 
+  const runLastfmImport = async (username: string) => {
+    setConnectingLastfm(true);
+    const exists = await lastfmUserExists(username);
+    if (!exists) {
+      setConnectingLastfm(false);
+      Alert.alert('User not found', `Couldn’t find a Last.fm account named “${username}”. Check the spelling and try again.`);
+      return;
+    }
+    await updateProfile({ lastfm_username: username });
+    setConnectingLastfm(false);
+    Alert.alert(
+      'Last.fm connected',
+      'We’re importing the artists you listen to in the background — they’ll appear shortly.'
+    );
+    (async () => {
+      try {
+        const count = await syncLastfm(username, 'replace');
+        await sendLocalNotification(
+          'Library imported',
+          count > 0
+            ? `${count} artists added from your Last.fm.`
+            : 'No artists found on that Last.fm account yet — scrobble some music and reconnect.'
+        );
+      } catch (e) {
+        console.error('Last.fm import error:', e);
+        await sendLocalNotification('Import issue', 'Connected to Last.fm, but importing artists failed. Try reconnecting.');
+      }
+    })();
+  };
+
+  const handleConnectLastfm = () => {
+    Alert.prompt(
+      'Connect Last.fm',
+      'Enter your Last.fm username. We’ll import the artists you listen to and keep it in sync.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Connect', onPress: (username?: string) => {
+          const u = (username ?? '').trim();
+          if (u) runLastfmImport(u);
+        } },
+      ],
+      'plain-text'
+    );
+  };
+
+  const handleDisconnectLastfm = () => {
+    Alert.alert(
+      'Disconnect Last.fm',
+      'Your imported artists will stay, but we’ll stop syncing from Last.fm.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Disconnect', style: 'destructive', onPress: () => updateProfile({ lastfm_username: null }) },
+      ]
+    );
+  };
+
+  const spotifyComingSoon = () => {
+    Alert.alert(
+      'Spotify — coming soon',
+      'Spotify import is rolling out gradually while we grow. For now, connect Last.fm to bring in your artists — it works the same way.'
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
@@ -221,7 +286,29 @@ export default function SettingsScreen() {
 
         {/* Connected Accounts */}
         <SectionHeader title="Connected Accounts" />
+        <Text style={styles.sectionNote}>
+          Import your artists from Last.fm. Spotify & Apple Music are rolling out soon.
+        </Text>
         <View style={styles.section}>
+          {/* Last.fm — the working import path */}
+          <SettingsRow
+            label={profile?.lastfm_username ? `Last.fm · ${profile.lastfm_username}` : 'Last.fm'}
+            right={
+              connectingLastfm ? (
+                <ActivityIndicator color={COLORS.accent} size="small" />
+              ) : profile?.lastfm_username ? (
+                <TouchableOpacity style={styles.disconnectBtn} onPress={handleDisconnectLastfm}>
+                  <Text style={styles.disconnectBtnText}>Disconnect</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity style={[styles.connectBtn, styles.lastfmBtn, styles.connectBtnRow]} onPress={handleConnectLastfm}>
+                  <FontAwesome name="lastfm" size={14} color="#fff" />
+                  <Text style={styles.connectBtnText}>Connect</Text>
+                </TouchableOpacity>
+              )
+            }
+          />
+          <View style={styles.separator} />
           <SettingsRow
             label="Spotify"
             right={
@@ -232,9 +319,8 @@ export default function SettingsScreen() {
                   <Text style={styles.disconnectBtnText}>Disconnect</Text>
                 </TouchableOpacity>
               ) : (
-                <TouchableOpacity style={[styles.connectBtn, styles.spotifyBtn, styles.connectBtnRow]} onPress={handleConnectSpotify}>
-                  <FontAwesome name="spotify" size={14} color="#fff" />
-                  <Text style={styles.connectBtnText}>Connect</Text>
+                <TouchableOpacity style={styles.comingSoonBtn} onPress={spotifyComingSoon}>
+                  <Text style={styles.comingSoonText}>Coming soon</Text>
                 </TouchableOpacity>
               )
             }
@@ -247,11 +333,10 @@ export default function SettingsScreen() {
                 <Text style={[styles.badge, styles.badgeRed]}>Connected</Text>
               ) : (
                 <TouchableOpacity
-                  style={[styles.connectBtn, styles.appleBtn, styles.connectBtnRow]}
-                  onPress={() => Alert.alert('Coming soon', 'Apple Music integration coming soon.')}
+                  style={styles.comingSoonBtn}
+                  onPress={() => Alert.alert('Apple Music — coming soon', 'Apple Music import is on the way. For now, connect Last.fm to bring in your artists.')}
                 >
-                  <FontAwesome name="apple" size={14} color="#fff" />
-                  <Text style={styles.connectBtnText}>Connect</Text>
+                  <Text style={styles.comingSoonText}>Coming soon</Text>
                 </TouchableOpacity>
               )
             }
@@ -484,6 +569,31 @@ const styles = StyleSheet.create({
   },
   appleBtn: {
     backgroundColor: '#FA243C',
+  },
+  lastfmBtn: {
+    backgroundColor: '#D51007',
+  },
+  comingSoonBtn: {
+    backgroundColor: 'transparent',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+  },
+  comingSoonText: {
+    color: COLORS.muted,
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  sectionNote: {
+    color: COLORS.muted,
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    paddingHorizontal: 4,
+    marginTop: -4,
+    marginBottom: 8,
+    lineHeight: 16,
   },
   connectBtnText: {
     color: COLORS.text,

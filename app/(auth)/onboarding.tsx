@@ -15,6 +15,8 @@ import { FontAwesome } from '@expo/vector-icons';
 import { useAuth } from '../../src/hooks/useAuth';
 import { useArtists } from '../../src/hooks/useArtists';
 import { useSpotifyAuth, exchangeSpotifyCode, getLibraryArtists } from '../../src/lib/spotify';
+import { lastfmUserExists, getLastfmTopArtists } from '../../src/lib/lastfm';
+import { ArtistSource } from '../../src/types';
 import { ArtistCard } from '../../src/components/ArtistCard';
 import { CityChip } from '../../src/components/CityChip';
 import { geocodeCity } from '../../src/lib/geocode';
@@ -36,6 +38,8 @@ export default function OnboardingScreen() {
   const [step, setStep] = useState(0);
   const [spotifyToken, setSpotifyToken] = useState<string | null>(null);
   const [spotifyConnecting, setSpotifyConnecting] = useState(false);
+  const [lastfmConnecting, setLastfmConnecting] = useState(false);
+  const [connectedSource, setConnectedSource] = useState<ArtistSource | null>(null);
   const [topArtists, setTopArtists] = useState<Partial<Artist>[]>([]);
   const [selectedArtistIds, setSelectedArtistIds] = useState<Set<string>>(new Set());
   const [cityInput, setCityInput] = useState('');
@@ -63,6 +67,7 @@ export default function OnboardingScreen() {
               setTopArtists(artists);
               const ids = new Set(artists.map((a, i) => a.spotify_id ?? String(i)));
               setSelectedArtistIds(ids);
+              setConnectedSource('spotify');
               setSpotifyConnecting(false);
             });
           } else {
@@ -82,6 +87,37 @@ export default function OnboardingScreen() {
   const handleSpotifyConnect = async () => {
     setSpotifyConnecting(true);
     await promptAsync();
+  };
+
+  const handleLastfmConnect = () => {
+    Alert.prompt(
+      'Connect Last.fm',
+      'Enter your Last.fm username to import the artists you listen to.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Connect',
+          onPress: async (username?: string) => {
+            const u = (username ?? '').trim();
+            if (!u) return;
+            setLastfmConnecting(true);
+            const exists = await lastfmUserExists(u);
+            if (!exists) {
+              setLastfmConnecting(false);
+              Alert.alert('User not found', `Couldn’t find a Last.fm account named “${u}”.`);
+              return;
+            }
+            await updateProfile({ lastfm_username: u });
+            const artists = await getLastfmTopArtists(u);
+            setTopArtists(artists);
+            setSelectedArtistIds(new Set(artists.map((a, i) => a.spotify_id ?? String(i))));
+            setConnectedSource('lastfm');
+            setLastfmConnecting(false);
+          },
+        },
+      ],
+      'plain-text'
+    );
   };
 
   const toggleArtist = (key: string) => {
@@ -121,7 +157,7 @@ export default function OnboardingScreen() {
         selectedArtistIds.has(a.spotify_id ?? String(i))
       );
       if (selectedArtists.length > 0) {
-        await importArtists(selectedArtists, 'spotify');
+        await importArtists(selectedArtists, connectedSource ?? 'manual');
       }
     } catch (e) {
       console.error('Onboarding finish error:', e);
@@ -132,9 +168,9 @@ export default function OnboardingScreen() {
 
   const steps = [
     <StepConnect
-      spotifyToken={spotifyToken}
-      connecting={spotifyConnecting}
-      onConnectSpotify={handleSpotifyConnect}
+      lastfmConnected={connectedSource === 'lastfm'}
+      lastfmConnecting={lastfmConnecting}
+      onConnectLastfm={handleLastfmConnect}
     />,
     <StepCity
       input={cityInput}
@@ -147,7 +183,7 @@ export default function OnboardingScreen() {
       artists={topArtists}
       selected={selectedArtistIds}
       onToggle={toggleArtist}
-      hasSpotify={!!spotifyToken}
+      hasSource={!!connectedSource}
     />,
   ];
 
@@ -210,33 +246,34 @@ export default function OnboardingScreen() {
 }
 
 function StepConnect({
-  spotifyToken,
-  connecting,
-  onConnectSpotify,
+  lastfmConnected,
+  lastfmConnecting,
+  onConnectLastfm,
 }: {
-  spotifyToken: string | null;
-  connecting: boolean;
-  onConnectSpotify: () => void;
+  lastfmConnected: boolean;
+  lastfmConnecting: boolean;
+  onConnectLastfm: () => void;
 }) {
   return (
     <View style={stepStyles.container}>
+      {/* Last.fm — the working import path */}
       <View style={stepStyles.serviceCard}>
         <View style={stepStyles.serviceInfo}>
-          <Text style={stepStyles.serviceName}>Spotify</Text>
-          <Text style={stepStyles.serviceDesc}>Import your top artists & followed artists</Text>
+          <Text style={stepStyles.serviceName}>Last.fm</Text>
+          <Text style={stepStyles.serviceDesc}>Import the artists you listen to</Text>
         </View>
         <TouchableOpacity
-          style={[stepStyles.connectButton, stepStyles.spotifyButton, spotifyToken && stepStyles.connectedButton]}
-          onPress={onConnectSpotify}
-          disabled={!!spotifyToken || connecting}
+          style={[stepStyles.connectButton, stepStyles.lastfmButton, lastfmConnected && stepStyles.connectedButton]}
+          onPress={onConnectLastfm}
+          disabled={lastfmConnected || lastfmConnecting}
         >
-          {connecting ? (
+          {lastfmConnecting ? (
             <ActivityIndicator color="#fff" size="small" />
           ) : (
             <View style={stepStyles.btnRow}>
-              {!spotifyToken && <FontAwesome name="spotify" size={14} color="#fff" />}
+              {!lastfmConnected && <FontAwesome name="lastfm" size={14} color="#fff" />}
               <Text style={stepStyles.connectButtonText}>
-                {spotifyToken ? 'Connected' : 'Connect'}
+                {lastfmConnected ? 'Connected' : 'Connect'}
               </Text>
             </View>
           )}
@@ -245,12 +282,27 @@ function StepConnect({
 
       <View style={stepStyles.serviceCard}>
         <View style={stepStyles.serviceInfo}>
-          <Text style={stepStyles.serviceName}>Apple Music</Text>
-          <Text style={stepStyles.serviceDesc}>Import your recently played artists</Text>
+          <Text style={stepStyles.serviceName}>Spotify</Text>
+          <Text style={stepStyles.serviceDesc}>Rolling out gradually as we grow</Text>
         </View>
-        <TouchableOpacity style={[stepStyles.connectButton, stepStyles.appleButton, stepStyles.btnRow]} onPress={() => Alert.alert('Coming soon', 'Apple Music integration coming soon.')}>
-          <FontAwesome name="apple" size={14} color="#fff" />
-          <Text style={stepStyles.connectButtonText}>Connect</Text>
+        <TouchableOpacity
+          style={stepStyles.comingSoonButton}
+          onPress={() => Alert.alert('Spotify — coming soon', 'Spotify import is rolling out gradually. For now, connect Last.fm — it imports your artists the same way.')}
+        >
+          <Text style={stepStyles.comingSoonText}>Coming soon</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={stepStyles.serviceCard}>
+        <View style={stepStyles.serviceInfo}>
+          <Text style={stepStyles.serviceName}>Apple Music</Text>
+          <Text style={stepStyles.serviceDesc}>Import your library</Text>
+        </View>
+        <TouchableOpacity
+          style={stepStyles.comingSoonButton}
+          onPress={() => Alert.alert('Apple Music — coming soon', 'Apple Music import is on the way. For now, connect Last.fm to bring in your artists.')}
+        >
+          <Text style={stepStyles.comingSoonText}>Coming soon</Text>
         </TouchableOpacity>
       </View>
 
@@ -306,20 +358,20 @@ function StepArtists({
   artists,
   selected,
   onToggle,
-  hasSpotify,
+  hasSource,
 }: {
   artists: Partial<Artist>[];
   selected: Set<string>;
   onToggle: (key: string) => void;
-  hasSpotify: boolean;
+  hasSource: boolean;
 }) {
-  if (!hasSpotify || artists.length === 0) {
+  if (!hasSource || artists.length === 0) {
     return (
       <View style={stepStyles.container}>
         <Text style={stepStyles.emptyText}>
-          {hasSpotify
-            ? 'No top artists found on Spotify.'
-            : 'Connect Spotify in the previous step to import artists, or add them manually in the Artists tab.'}
+          {hasSource
+            ? 'No artists found to import.'
+            : 'Connect Last.fm in the previous step to import artists, or add them manually in the Artists tab.'}
         </Text>
       </View>
     );
@@ -411,6 +463,24 @@ const stepStyles = StyleSheet.create({
   },
   appleButton: {
     backgroundColor: '#FA243C',
+  },
+  lastfmButton: {
+    backgroundColor: '#D51007',
+  },
+  comingSoonButton: {
+    backgroundColor: 'transparent',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    minWidth: 88,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+  },
+  comingSoonText: {
+    color: '#888',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
   },
   btnRow: {
     flexDirection: 'row',

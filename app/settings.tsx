@@ -14,14 +14,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import { Feather, FontAwesome } from '@expo/vector-icons';
-import { useAuth } from '../../src/hooks/useAuth';
-import { useArtists } from '../../src/hooks/useArtists';
-import { CityChip } from '../../src/components/CityChip';
-import { useSpotifyAuth, exchangeSpotifyCode, lastSpotifyError } from '../../src/lib/spotify';
-import { authenticateLastfm } from '../../src/lib/lastfm';
-import { geocodeCity } from '../../src/lib/geocode';
-import { sendTestNotification, sendLocalNotification } from '../../src/lib/notifications';
-import { HomeCity } from '../../src/types';
+import { useAuth } from '../src/hooks/useAuth';
+import { useArtists } from '../src/hooks/useArtists';
+import { CityChip } from '../src/components/CityChip';
+import { useSpotifyAuth, exchangeSpotifyCode, lastSpotifyError } from '../src/lib/spotify';
+import { authenticateLastfm } from '../src/lib/lastfm';
+import { geocodeCity } from '../src/lib/geocode';
+import { sendTestNotification, sendLocalNotification } from '../src/lib/notifications';
+import { HomeCity } from '../src/types';
 
 const COLORS = {
   bg: '#000',
@@ -221,7 +221,12 @@ export default function SettingsScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
-        <Text style={styles.title}>Settings</Text>
+        <View style={styles.headerRow}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={styles.backBtn}>
+            <Feather name="chevron-left" size={26} color={COLORS.text} />
+          </TouchableOpacity>
+          <Text style={styles.title}>Settings</Text>
+        </View>
 
         {/* Home Cities */}
         <SectionHeader title="Home Cities" />
@@ -413,13 +418,20 @@ const styles = StyleSheet.create({
   scroll: {
     paddingHorizontal: 16,
   },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    paddingTop: 8,
+    paddingBottom: 16,
+  },
+  backBtn: {
+    padding: 2,
+  },
   title: {
     color: COLORS.text,
     fontSize: 28,
     fontFamily: 'Inter_700Bold',
-    paddingTop: 12,
-    paddingBottom: 20,
-    paddingHorizontal: 4,
   },
   sectionHeader: {
     color: COLORS.muted,

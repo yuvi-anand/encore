@@ -17,7 +17,7 @@ import { ArtistCard } from '../../src/components/ArtistCard';
 import { GenreFilter } from '../../src/components/GenreFilter';
 import { searchArtists as searchSpotify, getSuggestedArtists } from '../../src/lib/spotify';
 import { searchAttractions } from '../../src/lib/ticketmaster';
-import { Artist, Genre, artistMatchesGenre } from '../../src/types';
+import { Artist, Genre, artistMatchesGenre, genreCounts, ALL_GENRES } from '../../src/types';
 
 const COLORS = {
   bg: '#000',
@@ -57,6 +57,46 @@ export default function DiscoverScreen() {
       active = false;
     };
   }, [profile?.spotify_token]);
+
+  // Fallback suggestions for users without Spotify (e.g. Last.fm): blend the
+  // top seeded artists for the genres they listen to most, straight from the DB
+  // (no Spotify user token needed). Keeps the "For you" tab useful for everyone.
+  useEffect(() => {
+    if (profile?.spotify_token || userArtists.length === 0) return;
+    let active = true;
+    (async () => {
+      const counts = genreCounts(userArtists.map((ua) => ua.artist?.genres));
+      const top = (Object.entries(counts) as [Genre, number][])
+        .filter(([, n]) => n > 0)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4)
+        .map(([g]) => g);
+      const genres = top.length ? top : ALL_GENRES.slice(0, 4);
+      const { data } = await supabase
+        .from('genre_artists')
+        .select('spotify_id, name, image_url, thumb_url, genres')
+        .in('genre', genres)
+        .order('rank', { ascending: true });
+      if (!active) return;
+      const seen = new Set<string>();
+      const rows = (data ?? [])
+        .filter((a: any) => a.spotify_id && !seen.has(a.spotify_id) && seen.add(a.spotify_id))
+        .map((a: any) => ({
+          spotify_id: a.spotify_id,
+          name: a.name,
+          image_url: a.image_url,
+          thumb_url: a.thumb_url,
+          genres: a.genres ?? [],
+          bandsintown_id: null,
+          ticketmaster_id: null,
+          apple_music_id: null,
+        })) as Partial<Artist>[];
+      setSuggestions(rows);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [profile?.spotify_token, userArtists]);
 
   // Load top artists for a genre when its tab is tapped — straight from the DB
   // (server-seeded), so NO Spotify call and no rate limit. Cached per genre.
@@ -230,9 +270,7 @@ export default function DiscoverScreen() {
       {!hasQuery && !selectedGenre && suggestionsFiltered.length === 0 && (
         <View style={styles.empty}>
           <Text style={styles.emptyText}>
-            {profile?.spotify_token
-              ? 'Search for an artist to get started.'
-              : 'Connect Spotify or search to find artists.'}
+            Search for an artist or browse by genre to get started.
           </Text>
         </View>
       )}

@@ -72,7 +72,7 @@ export default function ProfileScreen() {
         <View style={styles.statsRow}>
           <StatCard value={userArtists.length} label="Artists" />
           <StatCard value={0} label="Shows seen" />
-          <StatCard value={0} label="Badges" />
+          <StatCard value={0} label="Achievements" />
         </View>
 
         {/* Concerts (foundation for tracking) */}
@@ -81,12 +81,12 @@ export default function ProfileScreen() {
           <Feather name="calendar" size={24} color={COLORS.muted} />
           <Text style={styles.emptyTitle}>No shows tracked yet</Text>
           <Text style={styles.emptyBody}>
-            Mark concerts you attend to build your history and earn badges. Coming soon.
+            Mark concerts you attend to build your history and unlock achievements. Coming soon.
           </Text>
         </View>
 
-        {/* Badges (foundation) */}
-        <Text style={styles.sectionHeader}>Badges</Text>
+        {/* Achievements (foundation — earned by tracking concerts attended) */}
+        <Text style={styles.sectionHeader}>Achievements</Text>
         <View style={styles.badgeRow}>
           {['First Show', '5 Shows', 'Superfan', 'Explorer'].map((label) => (
             <View key={label} style={styles.badge}>
@@ -97,7 +97,7 @@ export default function ProfileScreen() {
             </View>
           ))}
         </View>
-        <Text style={styles.footnote}>Badges unlock as you track the shows you go to.</Text>
+        <Text style={styles.footnote}>Achievements unlock as you track the shows you go to.</Text>
 
         <View style={{ height: 40 }} />
       </ScrollView>

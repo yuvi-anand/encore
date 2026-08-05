@@ -16,7 +16,9 @@
       distance/radius so nearby-suburb shows appear.
 
 ## Backlog
-- [ ] **Concert badges and tracking** — mark shows attended, history, milestones.
+- [ ] **Concert tracking + achievements** (one unified feature) — mark shows
+      attended → builds concert history and unlocks achievements. Profile page
+      already has the scaffolding (Shows seen, Achievements, Your Concerts).
 - [ ] **Genre-filtered suggestions** in Discover (depends on enrichment above).
 - [ ] **Sub-2h tour detection** — track `last_checked_at` per artist so the cron
       can fire often while each artist is polled at a bounded Ticketmaster rate.

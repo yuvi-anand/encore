@@ -63,31 +63,45 @@ Deno.serve(async () => {
   const token = await getAppToken();
   if (!token) return new Response(JSON.stringify({ ok: false, error: 'no token' }), { status: 500 });
 
+  // Spotify caps search `limit` at 10 (a recent API change — 50 now 400s), so
+  // page through offsets to gather ~30 top artists per genre.
+  const PAGE = 10;
+  const OFFSETS = [0, 10, 20];
+
+  async function searchArtists(q: string): Promise<any[]> {
+    const collected: any[] = [];
+    for (const offset of OFFSETS) {
+      const res = await fetch(
+        `https://api.spotify.com/v1/search?q=${encodeURIComponent(q)}&type=artist&limit=${PAGE}&offset=${offset}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const items: any[] = res.ok ? (await res.json()).artists?.items ?? [] : [];
+      collected.push(...items);
+      if (items.length < PAGE) break; // no more pages
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    return collected;
+  }
+
   const summary: Record<string, number> = {};
   for (const [bucket, term] of Object.entries(GENRES)) {
     const q = term.includes(' ') ? `genre:"${term}"` : `genre:${term}`;
-    let res = await fetch(
-      `https://api.spotify.com/v1/search?q=${encodeURIComponent(q)}&type=artist&limit=50`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    let items: any[] = res.ok ? (await res.json()).artists?.items ?? [] : [];
-    if (items.length === 0) {
-      // Fallback to plain keyword search.
-      res = await fetch(
-        `https://api.spotify.com/v1/search?q=${encodeURIComponent(term)}&type=artist&limit=50`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      items = res.ok ? (await res.json()).artists?.items ?? [] : [];
-    }
+    let items = await searchArtists(q);
+    if (items.length === 0) items = await searchArtists(term); // keyword fallback
 
-    const rows = items.slice(0, 40).map((a, i) => ({ genre: bucket, rank: i, ...normalize(a) }));
-    // Replace this genre's set.
+    // Dedupe by spotify_id, keep order (rank).
+    const seen = new Set<string>();
+    const rows = items
+      .filter((a) => a?.id && !seen.has(a.id) && seen.add(a.id))
+      .slice(0, 30)
+      .map((a, i) => ({ genre: bucket, rank: i, ...normalize(a) }));
+
     await supabase.from('genre_artists').delete().eq('genre', bucket);
     if (rows.length > 0) {
       await supabase.from('genre_artists').upsert(rows, { onConflict: 'genre,spotify_id' });
     }
     summary[bucket] = rows.length;
-    await new Promise((r) => setTimeout(r, 300)); // gentle pacing
+    await new Promise((r) => setTimeout(r, 250)); // gentle pacing
   }
 
   return new Response(JSON.stringify({ ok: true, summary }), {

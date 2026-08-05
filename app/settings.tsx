@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -66,6 +66,18 @@ export default function SettingsScreen() {
   const [cityInput, setCityInput] = useState('');
   const [connectingSpotify, setConnectingSpotify] = useState(false);
   const [connectingLastfm, setConnectingLastfm] = useState(false);
+  const [username, setUsername] = useState(profile?.username ?? '');
+
+  // Keep the field in sync if the profile loads or changes after mount.
+  useEffect(() => {
+    setUsername(profile?.username ?? '');
+  }, [profile?.username]);
+
+  const saveUsername = async () => {
+    const trimmed = username.trim();
+    if (trimmed === (profile?.username ?? '')) return;
+    await updateProfile({ username: trimmed || null });
+  };
 
   const homeCities: HomeCity[] = profile?.home_cities ?? [];
   const radius = profile?.notification_radius_miles ?? 50;
@@ -229,6 +241,32 @@ export default function SettingsScreen() {
         </View>
 
         {/* Home Cities */}
+        {/* Profile */}
+        <SectionHeader title="Profile" />
+        <View style={styles.section}>
+          <View style={styles.profileRow}>
+            <Text style={styles.rowLabel}>Username</Text>
+            <TextInput
+              style={styles.usernameInput}
+              value={username}
+              onChangeText={setUsername}
+              onBlur={saveUsername}
+              onSubmitEditing={saveUsername}
+              placeholder="Set a username"
+              placeholderTextColor="#444"
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="done"
+              maxLength={30}
+            />
+          </View>
+          <View style={styles.separator} />
+          <SettingsRow
+            label="Email"
+            right={<Text style={styles.emailText} numberOfLines={1}>{user?.email ?? ''}</Text>}
+          />
+        </View>
+
         <SectionHeader title="Home Cities" />
         <View style={styles.section}>
           {homeCities.map((city, i) => (
@@ -461,6 +499,21 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: 'Inter_400Regular',
     flex: 1,
+  },
+  profileRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 50,
+    gap: 12,
+  },
+  usernameInput: {
+    flex: 1,
+    color: COLORS.text,
+    fontSize: 15,
+    fontFamily: 'Inter_400Regular',
+    textAlign: 'right',
+    paddingVertical: 12,
   },
   separator: {
     height: 1,

@@ -378,12 +378,21 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
       try {
         const artists = await getLastfmTopArtists(username);
         if (artists.length === 0) return 0;
-        return await importArtists(artists, 'lastfm', mode);
+        const count = await importArtists(artists, 'lastfm', mode);
+        // Last.fm returns names only — enrich images + genres server-side (via a
+        // Spotify app token) so avatars and genre tabs work, then refresh.
+        try {
+          await supabase.functions.invoke('enrich-artists', { body: {} });
+          await fetchArtists();
+        } catch (e) {
+          console.error('enrich after Last.fm import:', e);
+        }
+        return count;
       } finally {
         syncingRef.current = false;
       }
     },
-    [importArtists]
+    [importArtists, fetchArtists]
   );
 
   // Background re-sync: as listening habits evolve, pull the latest Spotify

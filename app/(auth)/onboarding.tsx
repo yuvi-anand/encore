@@ -15,7 +15,7 @@ import { FontAwesome } from '@expo/vector-icons';
 import { useAuth } from '../../src/hooks/useAuth';
 import { useArtists } from '../../src/hooks/useArtists';
 import { useSpotifyAuth, exchangeSpotifyCode, getLibraryArtists } from '../../src/lib/spotify';
-import { lastfmUserExists, getLastfmTopArtists } from '../../src/lib/lastfm';
+import { authenticateLastfm, getLastfmTopArtists } from '../../src/lib/lastfm';
 import { ArtistSource } from '../../src/types';
 import { ArtistCard } from '../../src/components/ArtistCard';
 import { CityChip } from '../../src/components/CityChip';
@@ -89,35 +89,20 @@ export default function OnboardingScreen() {
     await promptAsync();
   };
 
-  const handleLastfmConnect = () => {
-    Alert.prompt(
-      'Connect Last.fm',
-      'Enter your Last.fm username to import the artists you listen to.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Connect',
-          onPress: async (username?: string) => {
-            const u = (username ?? '').trim();
-            if (!u) return;
-            setLastfmConnecting(true);
-            const exists = await lastfmUserExists(u);
-            if (!exists) {
-              setLastfmConnecting(false);
-              Alert.alert('User not found', `Couldn’t find a Last.fm account named “${u}”.`);
-              return;
-            }
-            await updateProfile({ lastfm_username: u });
-            const artists = await getLastfmTopArtists(u);
-            setTopArtists(artists);
-            setSelectedArtistIds(new Set(artists.map((a, i) => a.spotify_id ?? String(i))));
-            setConnectedSource('lastfm');
-            setLastfmConnecting(false);
-          },
-        },
-      ],
-      'plain-text'
-    );
+  const handleLastfmConnect = async () => {
+    setLastfmConnecting(true);
+    // Opens Last.fm's login/sign-up page; returns the verified username.
+    const username = await authenticateLastfm();
+    if (!username) {
+      setLastfmConnecting(false);
+      return; // user cancelled or auth failed
+    }
+    await updateProfile({ lastfm_username: username });
+    const artists = await getLastfmTopArtists(username);
+    setTopArtists(artists);
+    setSelectedArtistIds(new Set(artists.map((a, i) => a.spotify_id ?? String(i))));
+    setConnectedSource('lastfm');
+    setLastfmConnecting(false);
   };
 
   const toggleArtist = (key: string) => {

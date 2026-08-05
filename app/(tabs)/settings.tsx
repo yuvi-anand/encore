@@ -18,7 +18,7 @@ import { useAuth } from '../../src/hooks/useAuth';
 import { useArtists } from '../../src/hooks/useArtists';
 import { CityChip } from '../../src/components/CityChip';
 import { useSpotifyAuth, exchangeSpotifyCode, lastSpotifyError } from '../../src/lib/spotify';
-import { lastfmUserExists } from '../../src/lib/lastfm';
+import { authenticateLastfm } from '../../src/lib/lastfm';
 import { geocodeCity } from '../../src/lib/geocode';
 import { sendTestNotification, sendLocalNotification } from '../../src/lib/notifications';
 import { HomeCity } from '../../src/types';
@@ -170,19 +170,19 @@ export default function SettingsScreen() {
     );
   };
 
-  const runLastfmImport = async (username: string) => {
+  const handleConnectLastfm = async () => {
     setConnectingLastfm(true);
-    const exists = await lastfmUserExists(username);
-    if (!exists) {
+    // Opens Last.fm's login/sign-up page; returns the verified username.
+    const username = await authenticateLastfm();
+    if (!username) {
       setConnectingLastfm(false);
-      Alert.alert('User not found', `Couldn’t find a Last.fm account named “${username}”. Check the spelling and try again.`);
-      return;
+      return; // user cancelled or auth failed
     }
     await updateProfile({ lastfm_username: username });
     setConnectingLastfm(false);
     Alert.alert(
       'Last.fm connected',
-      'We’re importing the artists you listen to in the background — they’ll appear shortly.'
+      `Signed in as ${username}. We’re importing the artists you listen to in the background — they’ll appear shortly.`
     );
     (async () => {
       try {
@@ -198,21 +198,6 @@ export default function SettingsScreen() {
         await sendLocalNotification('Import issue', 'Connected to Last.fm, but importing artists failed. Try reconnecting.');
       }
     })();
-  };
-
-  const handleConnectLastfm = () => {
-    Alert.prompt(
-      'Connect Last.fm',
-      'Enter your Last.fm username. We’ll import the artists you listen to and keep it in sync.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Connect', onPress: (username?: string) => {
-          const u = (username ?? '').trim();
-          if (u) runLastfmImport(u);
-        } },
-      ],
-      'plain-text'
-    );
   };
 
   const handleDisconnectLastfm = () => {

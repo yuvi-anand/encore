@@ -63,3 +63,17 @@ select cron.schedule(
 
 -- To remove the job later:
 --   select cron.unschedule('encore-sync-events');
+
+
+-- 3. Per-artist tour-check throttle -----------------------------------------
+-- Lets sync-events poll each artist at most every ~2h regardless of how often
+-- the cron fires. Without this column the function still works — it just checks
+-- every followed artist on every run.
+alter table artists add column if not exists last_checked_at timestamptz;
+create index if not exists artists_last_checked_at_idx on artists (last_checked_at);
+
+-- Optional: with the throttle in place you can safely run the cron more often
+-- (e.g. hourly) for fresher announcements, since each artist is still rate-
+-- limited to ~2h. To switch to hourly:
+--   select cron.unschedule('encore-sync-events');
+--   -- then re-run the cron.schedule above with '0 * * * *' instead of '0 */4 * * *'.

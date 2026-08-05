@@ -120,7 +120,32 @@ Deno.serve(async (req) => {
   const artistIds = [...new Set((links ?? []).map((l) => l.artist_id))];
   if (artistIds.length === 0) return new Response(JSON.stringify({ ok: true, new: 0 }));
 
-  const { data: artists } = await supabase.from('artists').select('id, name').in('id', artistIds);
+  // Per-artist throttle: only re-check artists not polled within CHECK_INTERVAL,
+  // oldest-checked first, up to BATCH per run. This decouples the cron cadence
+  // from per-artist Ticketmaster load — the cron can fire hourly while each
+  // artist is still polled at most every ~2h. Falls back to all followed artists
+  // if the last_checked_at column hasn't been added yet.
+  const CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
+  const BATCH = 200;
+  const cutoff = new Date(Date.now() - CHECK_INTERVAL_MS).toISOString();
+  let artists: { id: string; name: string }[] | null = null;
+  let hasThrottleColumn = true;
+  {
+    const { data, error } = await supabase
+      .from('artists')
+      .select('id, name')
+      .in('id', artistIds)
+      .or(`last_checked_at.is.null,last_checked_at.lt.${cutoff}`)
+      .order('last_checked_at', { ascending: true, nullsFirst: true })
+      .limit(BATCH);
+    if (error) {
+      hasThrottleColumn = false;
+      const fallback = await supabase.from('artists').select('id, name').in('id', artistIds);
+      artists = fallback.data;
+    } else {
+      artists = data;
+    }
+  }
 
   // 2. Which shows do we already know about? Key off ticketmaster_id — it's the
   // unique, stable identity of a Ticketmaster event. (An artist+date+city key
@@ -157,6 +182,11 @@ Deno.serve(async (req) => {
   let upsertErr: string | null = null;
   for (const artist of artists ?? []) {
     const evs = await fetchArtistEvents(artist.name, artist.id);
+    // Mark this artist checked (even with 0 shows) so the throttle can skip it
+    // next run instead of re-polling every artist every time.
+    if (hasThrottleColumn) {
+      await supabase.from('artists').update({ last_checked_at: new Date().toISOString() }).eq('id', artist.id);
+    }
     if (evs.length === 0) continue;
     const deduped = new Map<string, any>();
     for (const e of evs) deduped.set(e.ticketmaster_id, e);

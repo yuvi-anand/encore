@@ -1,30 +1,46 @@
 # Encore — TODO
 
 ## Next up
-- [ ] **Concert badges and tracking** — let users mark shows they've attended,
-      track concert history, and earn badges/milestones.
-- [ ] **Genre-filtered suggestions** in Discover — show top suggested artists per
-      genre. Spotify `genre:` search works but returns "popular in genre" (not
-      personalized) and adds `/search` load; needs careful throttling/caching so
-      it doesn't reintroduce rate-limit issues.
-- [ ] **Apple Music integration** — connect + import. Needs a MusicKit developer
-      token (Apple Developer account) and the native MusicKit module; bigger lift.
+- [ ] **Last.fm artist enrichment (images + genres).** Last.fm returns name-only
+      artists, and the existing backfill uses the *user's Spotify token* — which
+      Last.fm-only users don't have. So imported artists show letter avatars AND
+      have no genres, which breaks the genre tabs/filtering for Last.fm users.
+      Fix: enrich via a Spotify **client-credentials** app token (search each
+      name → image + genres), ideally in an edge function so the secret stays
+      server-side. Highest-value gap now that Last.fm is the primary import.
+- [ ] **Apple Music — Part 2 (library import).** Part 1 (developer token) is
+      done. Needs a native MusicKit module for the Music User Token + a rebuild.
+      See docs/apple-music-setup.md. `getAppleMusicLibraryArtists()` is ready.
+- [ ] **Feed radius fix.** The feed filters by home-city *name match*, not the
+      radius slider (Touring tab uses real distance). Make the feed use
+      distance/radius so nearby-suburb shows appear.
 
 ## Backlog
-- [ ] **Sub-2h tour detection (smarter per-artist throttle).** The sync-events
-      Edge Function makes 1 Ticketmaster call per followed artist per run.
-      Ticketmaster allows ~5,000 calls/day, so with ~376 artists the safe max is
-      every 2h. To run hourly (or faster) without blowing the quota, track a
-      `last_checked_at` per artist and only re-fetch artists not checked in the
-      last N hours — decouples cron frequency from per-artist API load. Lets the
-      cron fire often while each artist is polled at a bounded rate.
-- [ ] Real artist photos on the suggestion feed (blocked: Spotify `/artists`
-      batch endpoint 403s for new apps; per-artist `/search` doesn't scale on the
-      shared app rate limit). Currently letter avatars.
+- [ ] **Concert badges and tracking** — mark shows attended, history, milestones.
+- [ ] **Genre-filtered suggestions** in Discover (depends on enrichment above).
+- [ ] **Sub-2h tour detection** — track `last_checked_at` per artist so the cron
+      can fire often while each artist is polled at a bounded Ticketmaster rate.
+- [ ] **Remove the `?dry=1` diagnostics** from sync-events once notifications are
+      proven stable in the wild (keep the kill-switch pattern).
+
+## Done recently
+- [x] Notification floods fixed (1000-row pagination cap + ticketmaster_id dedup
+      + baseline/settle/cap); dry-run verified; re-enabled.
+- [x] Last.fm **web login flow** (opens Last.fm sign-in) + import + 12h re-sync.
+- [x] Apple Music **Part 1** — developer token generated, validated, in EAS.
+- [x] Spotify/Apple Music gated as "Coming soon"; Spotify login still works.
+- [x] Touring tab date/city/distance consistency; Spotify-login auto-import.
+
+## Your actions (not code)
+- [ ] Rotate the Spotify client secret (the one shared in chat is still active),
+      update it in Supabase → Auth → Providers → Spotify.
+- [ ] Back up the MusicKit `.p8` (can't be re-downloaded).
+- [ ] Allowlist Spotify friends (<=25) in the Spotify dashboard if you want them
+      using "Continue with Spotify".
 
 ## Notes / known limits
-- New-tour notifications come from **Ticketmaster listings**, not social media,
-  and fire on the cron interval (currently every 2h), location-independent.
+- New-tour notifications come from **Ticketmaster listings**, fire on the cron
+  interval (every 4h), location-independent.
 - Push delivery requires a real device + EAS/TestFlight build (not simulator).
-- Spotify `/artists` batch endpoint returns 403 for this app; image hydration
-  uses `/search` (rate-limited) + the local catalog cache.
+- Spotify can't scale (250k-MAU + business-only Extended Quota wall) — Last.fm
+  and Apple Music are the growth channels.

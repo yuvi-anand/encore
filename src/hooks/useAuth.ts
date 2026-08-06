@@ -3,6 +3,7 @@ import { Session, User, AuthError } from '@supabase/supabase-js';
 import * as WebBrowser from 'expo-web-browser';
 import * as AuthSession from 'expo-auth-session';
 import { supabase } from '../lib/supabase';
+import { authenticateLastfm } from '../lib/lastfm';
 import { Profile } from '../types';
 
 interface AuthContextValue {
@@ -13,6 +14,7 @@ interface AuthContextValue {
   signIn: (email: string, password: string) => Promise<AuthError | null>;
   signUp: (email: string, password: string) => Promise<AuthError | null>;
   signInWithSpotify: () => Promise<AuthError | { message: string } | null>;
+  signInWithLastfm: () => Promise<{ message: string } | null>;
   signOut: () => Promise<void>;
   deleteAccount: () => Promise<{ message: string } | null>;
   updateProfile: (updates: Partial<Profile>) => Promise<void>;
@@ -147,6 +149,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return null;
   }, []);
 
+  const signInWithLastfm = useCallback(async (): Promise<{ message: string } | null> => {
+    // Last.fm isn't an OAuth provider, so mint an instant guest (anonymous)
+    // account, then link the Last.fm username. Feels like "continue with Last.fm".
+    const { data: anon, error: anonErr } = await supabase.auth.signInAnonymously();
+    if (anonErr || !anon?.user) {
+      return {
+        message:
+          'Guest sign-in isn’t enabled yet. Enable anonymous sign-ins in Supabase → Authentication.',
+      };
+    }
+    const username = await authenticateLastfm();
+    if (!username) {
+      // Cancelled — don't leave an empty guest account lying around.
+      await supabase.auth.signOut();
+      return { message: 'cancelled' };
+    }
+    await ensureProfile(anon.user.id);
+    await supabase.from('profiles').update({ lastfm_username: username }).eq('id', anon.user.id);
+    // Refresh local profile so the background Last.fm import (keyed on
+    // profile.lastfm_username) fires immediately.
+    const refreshed = await ensureProfile(anon.user.id);
+    if (refreshed) setProfile(refreshed);
+    return null;
+  }, []);
+
   const signOut = useCallback(async () => {
     await supabase.auth.signOut();
   }, []);
@@ -193,6 +220,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     signIn,
     signUp,
     signInWithSpotify,
+    signInWithLastfm,
     signOut,
     deleteAccount,
     updateProfile,

@@ -32,17 +32,51 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [spotifyLoading, setSpotifyLoading] = useState(false);
+  const [lastfmLoading, setLastfmLoading] = useState(false);
 
-  const { signIn, signUp, signInWithSpotify } = useAuth();
+  const { signIn, signUp, signInWithSpotify, signInWithLastfm } = useAuth();
 
-  const handleSpotify = async () => {
-    setSpotifyLoading(true);
-    const error = await signInWithSpotify();
-    setSpotifyLoading(false);
-    if (error) {
-      Alert.alert('Spotify sign-in failed', error.message);
+  const handleSpotify = () => {
+    // Spotify is limited to whitelisted testers — gate behind a tester code.
+    Alert.prompt(
+      'Tester code required',
+      'Spotify is limited to whitelisted testers right now. Enter your tester code to continue.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Continue',
+          onPress: async (code?: string) => {
+            if ((code ?? '').trim().toLowerCase() !== 'specialtester') {
+              Alert.alert('Invalid code', 'That tester code isn’t valid.');
+              return;
+            }
+            setSpotifyLoading(true);
+            const error = await signInWithSpotify();
+            setSpotifyLoading(false);
+            if (error) Alert.alert('Spotify sign-in failed', error.message);
+            // On success the auth gate redirects automatically.
+          },
+        },
+      ],
+      'plain-text'
+    );
+  };
+
+  const handleLastfm = async () => {
+    setLastfmLoading(true);
+    const error = await signInWithLastfm();
+    setLastfmLoading(false);
+    if (error && error.message !== 'cancelled') {
+      Alert.alert('Last.fm sign-in failed', error.message);
     }
     // On success the auth gate redirects automatically.
+  };
+
+  const handleAppleMusic = () => {
+    Alert.alert(
+      'Apple Music — coming soon',
+      'Apple Music sign-in is on the way. For now, continue with Last.fm or email.'
+    );
   };
 
   const handleSubmit = async () => {
@@ -137,6 +171,21 @@ export default function LoginScreen() {
           </View>
 
           <TouchableOpacity
+            style={[styles.spotifyButton, styles.lastfmButton]}
+            onPress={handleLastfm}
+            disabled={lastfmLoading}
+          >
+            {lastfmLoading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <View style={styles.spotifyButtonInner}>
+                <FontAwesome name="lastfm" size={20} color="#fff" />
+                <Text style={styles.spotifyButtonText}>Continue with Last.fm</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
             style={styles.spotifyButton}
             onPress={handleSpotify}
             disabled={spotifyLoading}
@@ -149,6 +198,16 @@ export default function LoginScreen() {
                 <Text style={styles.spotifyButtonText}>Continue with Spotify</Text>
               </View>
             )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.spotifyButton, styles.appleMusicButton]}
+            onPress={handleAppleMusic}
+          >
+            <View style={styles.spotifyButtonInner}>
+              <FontAwesome name="apple" size={20} color="#fff" />
+              <Text style={styles.spotifyButtonText}>Continue with Apple Music</Text>
+            </View>
           </TouchableOpacity>
         </View>
 
@@ -242,6 +301,12 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 16,
     alignItems: 'center',
+  },
+  lastfmButton: {
+    backgroundColor: '#D51007',
+  },
+  appleMusicButton: {
+    backgroundColor: '#FA243C',
   },
   spotifyButtonInner: {
     flexDirection: 'row',

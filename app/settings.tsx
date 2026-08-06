@@ -223,10 +223,23 @@ export default function SettingsScreen() {
     );
   };
 
-  const spotifyComingSoon = () => {
-    Alert.alert(
-      'Spotify — coming soon',
-      'Spotify import is rolling out gradually while we grow. For now, connect Last.fm to bring in your artists — it works the same way.'
+  // Spotify is limited to whitelisted testers (dev-mode 25-user cap), so gate it
+  // behind a tester code before running the connect flow.
+  const promptSpotifyCode = () => {
+    Alert.prompt(
+      'Tester code required',
+      'Spotify is limited to whitelisted testers right now. Enter your tester code to connect.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Continue',
+          onPress: (code?: string) => {
+            if ((code ?? '').trim().toLowerCase() === 'specialtester') handleConnectSpotify();
+            else Alert.alert('Invalid code', 'That tester code isn’t valid.');
+          },
+        },
+      ],
+      'plain-text'
     );
   };
 
@@ -315,7 +328,7 @@ export default function SettingsScreen() {
         {/* Connected Accounts */}
         <SectionHeader title="Connected Accounts" />
         <Text style={styles.sectionNote}>
-          Import your artists from Last.fm. Spotify & Apple Music are rolling out soon.
+          Import your artists from Last.fm. Spotify needs a tester code; Apple Music is coming soon.
         </Text>
         <View style={styles.section}>
           {/* Last.fm — the working import path */}
@@ -347,8 +360,9 @@ export default function SettingsScreen() {
                   <Text style={styles.disconnectBtnText}>Disconnect</Text>
                 </TouchableOpacity>
               ) : (
-                <TouchableOpacity style={styles.comingSoonBtn} onPress={spotifyComingSoon}>
-                  <Text style={styles.comingSoonText}>Coming soon</Text>
+                <TouchableOpacity style={[styles.connectBtn, styles.spotifyBtn, styles.connectBtnRow]} onPress={promptSpotifyCode}>
+                  <FontAwesome name="spotify" size={14} color="#fff" />
+                  <Text style={styles.connectBtnText}>Connect</Text>
                 </TouchableOpacity>
               )
             }

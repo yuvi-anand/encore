@@ -71,3 +71,31 @@ pattern from Last.fm/Spotify can be copied for keep-in-sync behavior.
 **Bottom line:** Part 1 is a 15-minute Apple-portal task you can do now. Part 2
 is the real lift (native module + rebuild). Until Part 2 is done, Apple Music
 stays "Coming soon" in the UI — which is exactly how it's labeled.
+
+---
+
+## Branch status: `apple-musickit`
+
+The integration is implemented on the **`apple-musickit`** branch (NOT `main` —
+`main` keeps Apple Music as "Coming soon" so it stays TestFlight-safe). What's
+wired there:
+
+- Module: **`@superfan-app/apple-music-auth`** (Expo module + config plugin) —
+  handles MusicKit authorization and returns the Music User Token.
+- `app.json`: added the config plugin (sets `NSAppleMusicUsageDescription`,
+  iOS 15 min target).
+- `app/_layout.tsx`: wrapped the app in `AppleMusicAuthProvider` with the
+  developer token from `EXPO_PUBLIC_APPLE_MUSIC_DEVELOPER_TOKEN`.
+- `settings.tsx`: Apple Music row is now a real Connect → `requestAndGetToken()`
+  → store token → `getAppleMusicLibraryArtists()` → `importArtists('apple_music')`.
+
+**Before it can work on a device (all required):**
+1. Enable **MusicKit** on the App ID `com.yuvianand.encore` in the Apple
+   Developer portal (Identifiers → the App ID → check MusicKit → Save). EAS will
+   regenerate the provisioning profile on the next build.
+2. Build from this branch: `eas build --profile preview --platform ios`.
+3. Test on a **real device with an active Apple Music subscription** — MusicKit
+   auth + library reads can't be validated any other way.
+
+Once verified on-device, merge `apple-musickit` → `main` and flip the login /
+onboarding Apple Music buttons from "Coming soon" to the real connect.

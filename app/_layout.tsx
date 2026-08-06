@@ -4,6 +4,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator } from 'react-native';
 import { useFonts, Inter_400Regular, Inter_600SemiBold, Inter_700Bold } from '@expo-google-fonts/inter';
+import { AppleMusicAuthProvider } from '@superfan-app/apple-music-auth';
 import { AuthProvider, useAuth } from '../src/hooks/useAuth';
 import { ArtistsProvider } from '../src/hooks/useArtists';
 import { registerForPushNotifications, savePushToken } from '../src/lib/notifications';
@@ -61,19 +62,21 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <StatusBar style="light" />
-      <AuthProvider>
-        <ArtistsProvider>
-          <AuthGate>
-            <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#000' } }}>
-              <Stack.Screen name="index" />
-              <Stack.Screen name="(auth)" />
-              <Stack.Screen name="(tabs)" />
-              <Stack.Screen name="account" options={{ presentation: 'card' }} />
-              <Stack.Screen name="settings" options={{ presentation: 'card' }} />
-            </Stack>
-          </AuthGate>
-        </ArtistsProvider>
-      </AuthProvider>
+      <AppleMusicAuthProvider developerToken={process.env.EXPO_PUBLIC_APPLE_MUSIC_DEVELOPER_TOKEN}>
+        <AuthProvider>
+          <ArtistsProvider>
+            <AuthGate>
+              <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#000' } }}>
+                <Stack.Screen name="index" />
+                <Stack.Screen name="(auth)" />
+                <Stack.Screen name="(tabs)" />
+                <Stack.Screen name="account" options={{ presentation: 'card' }} />
+                <Stack.Screen name="settings" options={{ presentation: 'card' }} />
+              </Stack>
+            </AuthGate>
+          </ArtistsProvider>
+        </AuthProvider>
+      </AppleMusicAuthProvider>
     </GestureHandlerRootView>
   );
 }

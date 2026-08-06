@@ -19,6 +19,8 @@ import { useArtists } from '../src/hooks/useArtists';
 import { CityChip } from '../src/components/CityChip';
 import { useSpotifyAuth, exchangeSpotifyCode, lastSpotifyError } from '../src/lib/spotify';
 import { authenticateLastfm } from '../src/lib/lastfm';
+import { getAppleMusicLibraryArtists } from '../src/lib/appleMusic';
+import { useAppleMusicAuth } from '@superfan-app/apple-music-auth';
 import { geocodeCity } from '../src/lib/geocode';
 import { sendTestNotification, sendLocalNotification } from '../src/lib/notifications';
 import { HomeCity } from '../src/types';
@@ -62,10 +64,12 @@ function SettingsRow({
 
 export default function SettingsScreen() {
   const { user, profile, updateProfile } = useAuth();
-  const { syncLibrary, syncLastfm } = useArtists();
+  const { syncLibrary, syncLastfm, importArtists } = useArtists();
+  const { requestAndGetToken } = useAppleMusicAuth();
   const [cityInput, setCityInput] = useState('');
   const [connectingSpotify, setConnectingSpotify] = useState(false);
   const [connectingLastfm, setConnectingLastfm] = useState(false);
+  const [connectingAppleMusic, setConnectingAppleMusic] = useState(false);
   const [username, setUsername] = useState(profile?.username ?? '');
 
   // Keep the field in sync if the profile loads or changes after mount.
@@ -212,6 +216,56 @@ export default function SettingsScreen() {
     })();
   };
 
+  const handleConnectAppleMusic = async () => {
+    setConnectingAppleMusic(true);
+    let userToken: string | null = null;
+    try {
+      userToken = await requestAndGetToken();
+    } catch (e: any) {
+      setConnectingAppleMusic(false);
+      Alert.alert('Apple Music sign-in failed', e?.message ?? 'Please try again.');
+      return;
+    }
+    if (!userToken) {
+      setConnectingAppleMusic(false);
+      Alert.alert('Apple Music', 'Access was not granted.');
+      return;
+    }
+    await updateProfile({ apple_music_token: userToken });
+    setConnectingAppleMusic(false);
+    Alert.alert(
+      'Apple Music connected',
+      'Importing the artists in your library in the background — they’ll appear shortly.'
+    );
+    const token = userToken;
+    (async () => {
+      try {
+        const artists = await getAppleMusicLibraryArtists(token);
+        const count = artists.length ? await importArtists(artists, 'apple_music', 'replace') : 0;
+        await sendLocalNotification(
+          'Library imported',
+          count > 0
+            ? `${count} artists added from Apple Music.`
+            : 'No artists found in your Apple Music library yet.'
+        );
+      } catch (e) {
+        console.error('Apple Music import error:', e);
+        await sendLocalNotification('Import issue', 'Apple Music connected, but importing artists failed.');
+      }
+    })();
+  };
+
+  const handleDisconnectAppleMusic = () => {
+    Alert.alert(
+      'Disconnect Apple Music',
+      'Your imported artists will stay, but we’ll stop syncing from Apple Music.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Disconnect', style: 'destructive', onPress: () => updateProfile({ apple_music_token: null }) },
+      ]
+    );
+  };
+
   const handleDisconnectLastfm = () => {
     Alert.alert(
       'Disconnect Last.fm',
@@ -328,7 +382,7 @@ export default function SettingsScreen() {
         {/* Connected Accounts */}
         <SectionHeader title="Connected Accounts" />
         <Text style={styles.sectionNote}>
-          Import your artists from Last.fm. Spotify needs a tester code; Apple Music is coming soon.
+          Import your artists from Last.fm or Apple Music. Spotify needs a tester code.
         </Text>
         <View style={styles.section}>
           {/* Last.fm — the working import path */}
@@ -371,14 +425,16 @@ export default function SettingsScreen() {
           <SettingsRow
             label="Apple Music"
             right={
-              profile?.apple_music_token ? (
-                <Text style={[styles.badge, styles.badgeRed]}>Connected</Text>
+              connectingAppleMusic ? (
+                <ActivityIndicator color={COLORS.accent} size="small" />
+              ) : profile?.apple_music_token ? (
+                <TouchableOpacity style={styles.disconnectBtn} onPress={handleDisconnectAppleMusic}>
+                  <Text style={styles.disconnectBtnText}>Disconnect</Text>
+                </TouchableOpacity>
               ) : (
-                <TouchableOpacity
-                  style={styles.comingSoonBtn}
-                  onPress={() => Alert.alert('Apple Music — coming soon', 'Apple Music import is on the way. For now, connect Last.fm to bring in your artists.')}
-                >
-                  <Text style={styles.comingSoonText}>Coming soon</Text>
+                <TouchableOpacity style={[styles.connectBtn, styles.appleBtn, styles.connectBtnRow]} onPress={handleConnectAppleMusic}>
+                  <FontAwesome name="apple" size={14} color="#fff" />
+                  <Text style={styles.connectBtnText}>Connect</Text>
                 </TouchableOpacity>
               )
             }

@@ -47,7 +47,13 @@
           "color": "#6C63FF"
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "@superfan-app/apple-music-auth",
+        {
+          "usageDescription": "Encore uses Apple Music to import the artists you listen to."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

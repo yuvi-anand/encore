@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { syncArtistEvents } from '../lib/events';
+import { syncArtistEvents, chunk } from '../lib/events';
 import { Event, Artist, HomeCity } from '../types';
 
 type EventRow = Event & { artist: Artist };
@@ -34,17 +34,30 @@ export function useEvents(
       return;
     }
 
-    const { data, error } = await supabase
-      .from('events')
-      .select('*, artist:artists(*)')
-      .in('artist_id', artistIds)
-      .gte('event_date', new Date().toISOString())
-      .order('event_date', { ascending: true });
+    // Batch the id list — a user following hundreds of artists would otherwise
+    // build a URL long enough for PostgREST to reject the request outright.
+    const nowIso = new Date().toISOString();
+    const collected: EventRow[] = [];
+    let failed = false;
+    for (const group of chunk(artistIds)) {
+      const { data, error } = await supabase
+        .from('events')
+        .select('*, artist:artists(*)')
+        .in('artist_id', group)
+        .gte('event_date', nowIso)
+        .order('event_date', { ascending: true });
+      if (error) {
+        console.error('fetchEvents error:', error);
+        failed = true;
+        continue;
+      }
+      collected.push(...((data ?? []) as EventRow[]));
+    }
 
-    if (error) {
-      console.error('fetchEvents error:', error);
-    } else {
-      const rows = ((data ?? []) as EventRow[]).filter((e) => matchesHomeCity(e, homeCities));
+    if (!failed || collected.length > 0) {
+      const rows = collected
+        .filter((e) => matchesHomeCity(e, homeCities))
+        .sort((a, b) => new Date(a.event_date).getTime() - new Date(b.event_date).getTime());
       setEvents(rows);
     }
     setLoading(false);

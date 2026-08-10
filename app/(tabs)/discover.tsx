@@ -61,17 +61,24 @@ export default function DiscoverScreen() {
   // Fallback suggestions for users without Spotify (e.g. Last.fm): blend the
   // top seeded artists for the genres they listen to most, straight from the DB
   // (no Spotify user token needed). Keeps the "For you" tab useful for everyone.
+  // Derived as a stable string so the effect below only re-runs when the actual
+  // genre mix changes — `userArtists` gets a fresh array identity on every
+  // refetch, which would otherwise re-query on each import tick.
+  const topGenreKey = useMemo(() => {
+    const counts = genreCounts(userArtists.map((ua) => ua.artist?.genres));
+    const top = (Object.entries(counts) as [Genre, number][])
+      .filter(([, n]) => n > 0)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([g]) => g);
+    return (top.length ? top : ALL_GENRES.slice(0, 4)).join(',');
+  }, [userArtists]);
+
   useEffect(() => {
-    if (profile?.spotify_token || userArtists.length === 0) return;
+    if (profile?.spotify_token) return;
     let active = true;
     (async () => {
-      const counts = genreCounts(userArtists.map((ua) => ua.artist?.genres));
-      const top = (Object.entries(counts) as [Genre, number][])
-        .filter(([, n]) => n > 0)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 4)
-        .map(([g]) => g);
-      const genres = top.length ? top : ALL_GENRES.slice(0, 4);
+      const genres = topGenreKey.split(',') as Genre[];
       const { data } = await supabase
         .from('genre_artists')
         .select('spotify_id, name, image_url, thumb_url, genres')
@@ -96,7 +103,7 @@ export default function DiscoverScreen() {
     return () => {
       active = false;
     };
-  }, [profile?.spotify_token, userArtists]);
+  }, [profile?.spotify_token, topGenreKey]);
 
   // Load top artists for a genre when its tab is tapped — straight from the DB
   // (server-seeded), so NO Spotify call and no rate limit. Cached per genre.
@@ -250,7 +257,7 @@ export default function DiscoverScreen() {
       {/* Only show "no results" once a search for the CURRENT text has finished. */}
       {!searching && results.length === 0 && hasQuery && searchedQuery === query.trim() && (
         <View style={styles.empty}>
-          <Text style={styles.emptyText}>No artists found for "{query.trim()}"</Text>
+          <Text style={styles.emptyText}>No artists found for “{query.trim()}”</Text>
         </View>
       )}
 

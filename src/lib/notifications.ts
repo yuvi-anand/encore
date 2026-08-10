@@ -165,8 +165,22 @@ export async function syncEventReminders(
   if (!granted) return 0;
 
   await Notifications.cancelAllScheduledNotificationsAsync();
+
+  // iOS only keeps 64 pending local notifications per app and silently discards
+  // the rest, so schedule the soonest shows first and stop before the ceiling.
+  // Without this, a user following hundreds of artists would fire hundreds of
+  // native calls on every list change and still lose most of the reminders.
+  const MAX_PENDING = 60;
+  const perEvent = (options.weekBefore ? 1 : 0) + (options.dayBefore ? 1 : 0);
+  if (perEvent === 0) return 0;
+
+  const upcoming = events
+    .filter((e) => e.artist && new Date(e.event_date).getTime() > Date.now())
+    .sort((a, b) => new Date(a.event_date).getTime() - new Date(b.event_date).getTime())
+    .slice(0, Math.floor(MAX_PENDING / perEvent));
+
   let scheduled = 0;
-  for (const event of events) {
+  for (const event of upcoming) {
     if (!event.artist) continue;
     if (options.weekBefore) {
       await scheduleEventNotification(event, event.artist, 7);

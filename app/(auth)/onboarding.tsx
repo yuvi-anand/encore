@@ -151,13 +151,17 @@ export default function OnboardingScreen() {
     router.replace('/(tabs)/feed');
   };
 
+  // Keyed so React treats each step as its own element rather than reconciling
+  // one step's state onto the next when `step` changes.
   const steps = [
     <StepConnect
+      key="connect"
       lastfmConnected={connectedSource === 'lastfm'}
       lastfmConnecting={lastfmConnecting}
       onConnectLastfm={handleLastfmConnect}
     />,
     <StepCity
+      key="city"
       input={cityInput}
       onChangeInput={setCityInput}
       onAdd={addCity}
@@ -165,6 +169,7 @@ export default function OnboardingScreen() {
       onRemove={removeCity}
     />,
     <StepArtists
+      key="artists"
       artists={topArtists}
       selected={selectedArtistIds}
       onToggle={toggleArtist}

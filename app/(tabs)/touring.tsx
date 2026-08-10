@@ -13,7 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../src/hooks/useAuth';
 import { useArtists } from '../../src/hooks/useArtists';
 import { supabase } from '../../src/lib/supabase';
-import { syncArtistEvents } from '../../src/lib/events';
+import { syncArtistEvents, chunk } from '../../src/lib/events';
 import { Event, Artist, distanceMiles } from '../../src/types';
 
 const COLORS = {
@@ -60,14 +60,23 @@ export default function TouringScreen() {
       setLoading(false);
       return;
     }
-    const { data, error } = await supabase
-      .from('events')
-      .select('*, artist:artists(*)')
-      .in('artist_id', artistIds)
-      .gte('event_date', new Date().toISOString())
-      .order('event_date', { ascending: true });
-    if (error) console.error('touring fetch error:', error);
-    setEvents(((data ?? []) as (Event & { artist: Artist })[]).filter((e) => e.artist));
+    // Batched: a large followed-artist list would otherwise overflow the URL.
+    const nowIso = new Date().toISOString();
+    const collected: (Event & { artist: Artist })[] = [];
+    for (const group of chunk(artistIds)) {
+      const { data, error } = await supabase
+        .from('events')
+        .select('*, artist:artists(*)')
+        .in('artist_id', group)
+        .gte('event_date', nowIso)
+        .order('event_date', { ascending: true });
+      if (error) {
+        console.error('touring fetch error:', error);
+        continue;
+      }
+      collected.push(...((data ?? []) as (Event & { artist: Artist })[]));
+    }
+    setEvents(collected.filter((e) => e.artist));
     setLoading(false);
   }, [artistIds]);
 

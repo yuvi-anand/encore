@@ -10,6 +10,32 @@ const SYNC_INTERVAL_MS = 12 * 60 * 60 * 1000; // re-sync at most every 12h
 
 type UserArtistRow = UserArtist & { artist: Artist };
 
+/** `%` and `_` are LIKE wildcards — escape them so names match literally. */
+function escapeLike(name: string): string {
+  return name.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+/**
+ * Matching key for "is this the same artist?" across sources. Last.fm, Spotify
+ * and Apple Music punctuate and case names differently ("Tyler, The Creator" vs
+ * "Tyler the Creator"), so compare on a stripped-down form.
+ */
+function normalizeName(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
 interface ArtistsContextValue {
   userArtists: UserArtistRow[];
   loading: boolean;
@@ -45,7 +71,7 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
   // effect would retrigger itself in an infinite loop.
   const autoSyncedRef = useRef<string>('');
   const lastfmSyncedRef = useRef<string>('');
-  const backfillingRef = useRef(false);
+  const enrichingRef = useRef(false);
 
   const fetchArtists = useCallback(async () => {
     if (!userId) {
@@ -88,22 +114,29 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
       if (artistData.bandsintown_id) filters.push(`bandsintown_id.eq.${artistData.bandsintown_id}`);
       if (artistData.ticketmaster_id) filters.push(`ticketmaster_id.eq.${artistData.ticketmaster_id}`);
 
+      // NOTE: these lookups use limit(1) rather than maybeSingle() on purpose —
+      // maybeSingle() *errors* when more than one row matches, and the catalog
+      // legitimately contains same-named rows. That error used to leave artistId
+      // null and insert yet another duplicate, compounding the problem.
       if (filters.length > 0) {
         const { data: existing } = await supabase
           .from('artists')
           .select('id')
           .or(filters.join(','))
-          .maybeSingle();
-        if (existing) artistId = existing.id;
+          .limit(1);
+        if (existing?.[0]) artistId = existing[0].id;
       }
 
       if (!artistId && artistData.name) {
         const { data: byName } = await supabase
           .from('artists')
           .select('id')
-          .ilike('name', artistData.name)
-          .maybeSingle();
-        if (byName) artistId = byName.id;
+          .ilike('name', escapeLike(artistData.name))
+          // Prefer the most complete row so duplicates converge on one canonical
+          // artist instead of fanning out further.
+          .order('spotify_id', { ascending: false, nullsFirst: false })
+          .limit(1);
+        if (byName?.[0]) artistId = byName[0].id;
       }
 
       if (!artistId) {
@@ -183,106 +216,190 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
           .eq('source', source);
       }
 
-      // De-dupe the incoming batch by spotify id / name.
+      // De-dupe the incoming batch, keeping the FIRST occurrence so the caller's
+      // ordering (most-listened first) survives as the stored rank.
       const byKey = new Map<string, Partial<Artist>>();
       for (const a of artists) {
-        const key = a.spotify_id ?? a.bandsintown_id ?? a.name?.toLowerCase() ?? '';
-        if (key && !byKey.has(key)) byKey.set(key, a);
+        const name = a.name?.trim();
+        if (!name) continue;
+        const key = a.spotify_id ? `sp:${a.spotify_id}` : `nm:${normalizeName(name)}`;
+        if (!byKey.has(key)) byKey.set(key, a);
       }
       const unique = Array.from(byKey.values());
+      if (unique.length === 0) return 0;
 
+      // Resolve every incoming artist to a catalog row id, in bulk. This used to
+      // fall back to a per-artist path (several queries plus a full refetch each)
+      // for any artist without a spotify_id — i.e. every Last.fm artist — which
+      // made a few-hundred-artist import take thousands of round trips.
+      const rowIdFor = new Map<Partial<Artist>, string>();
+      const unresolved = new Set(unique);
+
+      // 1. Match on spotify_id.
       const withSpotify = unique.filter((a) => a.spotify_id);
-      const idBySpotify = new Map<string, string>();
-      // Rank by position in the (already ranked) input list.
-      const rankBySpotify = new Map<string, number>();
-      withSpotify.forEach((a, i) => rankBySpotify.set(a.spotify_id as string, i));
-
-      const chunk = <T,>(arr: T[], size: number): T[][] => {
-        const out: T[][] = [];
-        for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-        return out;
-      };
-
       if (withSpotify.length > 0) {
-        const spotifyIds = withSpotify.map((a) => a.spotify_id as string);
-
-        // 1. Find which of these artists already exist (chunked to keep URLs small).
-        const existingBare = new Map<string, string>(); // spotify_id -> row id, missing image/genres
-        for (const ids of chunk(spotifyIds, 80)) {
-          const { data: existing, error: selErr } = await supabase
+        const idBySpotify = new Map<string, string>();
+        for (const group of chunk(withSpotify.map((a) => a.spotify_id as string), 80)) {
+          const { data, error } = await supabase
             .from('artists')
-            .select('id, spotify_id, image_url, genres')
-            .in('spotify_id', ids);
-          if (selErr) console.error('importArtists select error:', selErr);
-          for (const row of existing ?? []) {
-            if (!row.spotify_id) continue;
-            idBySpotify.set(row.spotify_id, row.id);
-            if (!row.image_url || !(row.genres?.length)) existingBare.set(row.spotify_id, row.id);
+            .select('id, spotify_id')
+            .in('spotify_id', group);
+          if (error) console.error('importArtists spotify lookup error:', error);
+          for (const row of data ?? []) if (row.spotify_id) idBySpotify.set(row.spotify_id, row.id);
+        }
+        for (const a of withSpotify) {
+          const id = idBySpotify.get(a.spotify_id as string);
+          if (id) {
+            rowIdFor.set(a, id);
+            unresolved.delete(a);
           }
         }
+      }
 
-        // 1b. Backfill image/genres onto existing rows that were imported bare
-        // before (e.g. from a prior import), when we now have better data.
-        for (const a of withSpotify) {
-          const sid = a.spotify_id as string;
-          const rowId = existingBare.get(sid);
-          if (!rowId) continue;
-          if (!a.image_url && !(a.genres?.length)) continue;
+      // 2. Match whatever's left by name (case/punctuation-insensitive). This is
+      // what lets a Last.fm "Radiohead" and a Spotify "Radiohead" collapse onto
+      // one catalog row instead of creating a duplicate.
+      const remaining = Array.from(unresolved);
+      if (remaining.length > 0) {
+        const byNormName = new Map<string, { id: string; spotify_id: string | null }>();
+        const names = remaining.map((a) => (a.name as string).trim());
+        // Exact match first (cheap), then a case-insensitive pass for the rest.
+        for (const group of chunk(names, 60)) {
+          const { data } = await supabase
+            .from('artists')
+            .select('id, name, spotify_id')
+            .in('name', group);
+          for (const row of data ?? []) {
+            const k = normalizeName(row.name ?? '');
+            const prev = byNormName.get(k);
+            // Prefer a row that already has a spotify_id as the canonical one.
+            if (!prev || (!prev.spotify_id && row.spotify_id)) {
+              byNormName.set(k, { id: row.id, spotify_id: row.spotify_id });
+            }
+          }
+        }
+        const stillMissing = remaining.filter(
+          (a) => !byNormName.has(normalizeName(a.name as string))
+        );
+        for (const group of chunk(stillMissing, 40)) {
+          // Quote values so names containing commas ("Tyler, The Creator") don't
+          // break the or() filter; skip the rare names that need escaping.
+          const ors = group
+            .map((a) => (a.name as string).trim())
+            .filter((n) => !/["\\%_]/.test(n))
+            .map((n) => `name.ilike."${n}"`);
+          if (ors.length === 0) continue;
+          const { data } = await supabase
+            .from('artists')
+            .select('id, name, spotify_id')
+            .or(ors.join(','));
+          for (const row of data ?? []) {
+            const k = normalizeName(row.name ?? '');
+            const prev = byNormName.get(k);
+            if (!prev || (!prev.spotify_id && row.spotify_id)) {
+              byNormName.set(k, { id: row.id, spotify_id: row.spotify_id });
+            }
+          }
+        }
+        for (const a of remaining) {
+          const hit = byNormName.get(normalizeName(a.name as string));
+          if (hit) {
+            rowIdFor.set(a, hit.id);
+            unresolved.delete(a);
+          }
+        }
+      }
+
+      // 3. Bulk-insert anything genuinely new.
+      const toInsert = Array.from(unresolved);
+      for (const group of chunk(toInsert, 80)) {
+        const { data: inserted, error: insErr } = await supabase
+          .from('artists')
+          .insert(
+            group.map((a) => ({
+              name: (a.name as string).trim(),
+              spotify_id: a.spotify_id ?? null,
+              apple_music_id: a.apple_music_id ?? null,
+              genres: a.genres ?? [],
+              image_url: a.image_url ?? null,
+              thumb_url: a.thumb_url ?? null,
+            }))
+          )
+          .select('id, name, spotify_id');
+        if (insErr) {
+          console.error('importArtists insert error:', insErr);
+          continue;
+        }
+        // Map inserted rows back by spotify_id when present, else by name.
+        const insertedBySpotify = new Map<string, string>();
+        const insertedByName = new Map<string, string>();
+        for (const row of inserted ?? []) {
+          if (row.spotify_id) insertedBySpotify.set(row.spotify_id, row.id);
+          insertedByName.set(normalizeName(row.name ?? ''), row.id);
+        }
+        for (const a of group) {
+          const id = a.spotify_id
+            ? insertedBySpotify.get(a.spotify_id)
+            : insertedByName.get(normalizeName(a.name as string));
+          if (id) rowIdFor.set(a, id);
+        }
+      }
+
+      // 4. Upgrade catalog rows that are missing artwork/genres when this import
+      // carries better data (e.g. a Spotify import filling in a bare Last.fm row).
+      const upgradable = unique.filter(
+        (a) => rowIdFor.has(a) && (a.image_url || a.genres?.length)
+      );
+      if (upgradable.length > 0) {
+        const ids = upgradable.map((a) => rowIdFor.get(a) as string);
+        const bare = new Set<string>();
+        for (const group of chunk(ids, 80)) {
+          const { data } = await supabase
+            .from('artists')
+            .select('id, image_url, genres')
+            .in('id', group);
+          for (const row of data ?? []) {
+            if (!row.image_url || !row.genres?.length) bare.add(row.id);
+          }
+        }
+        for (const a of upgradable) {
+          const id = rowIdFor.get(a) as string;
+          if (!bare.has(id)) continue;
           await supabase
             .from('artists')
             .update({
               ...(a.image_url && { image_url: a.image_url, thumb_url: a.thumb_url ?? a.image_url }),
               ...(a.genres?.length && { genres: a.genres }),
+              ...(a.spotify_id && { spotify_id: a.spotify_id }),
             })
-            .eq('id', rowId);
-        }
-
-        // 2. Insert the ones that don't exist yet (chunked).
-        const toInsert = withSpotify.filter((a) => !idBySpotify.has(a.spotify_id as string));
-        for (const group of chunk(toInsert, 80)) {
-          const { data: inserted, error: insErr } = await supabase
-            .from('artists')
-            .insert(
-              group.map((a) => ({
-                name: a.name ?? '',
-                spotify_id: a.spotify_id ?? null,
-                genres: a.genres ?? [],
-                image_url: a.image_url ?? null,
-                thumb_url: a.thumb_url ?? null,
-              }))
-            )
-            .select('id, spotify_id');
-          if (insErr) console.error('importArtists insert error:', insErr);
-          for (const row of inserted ?? []) {
-            if (row.spotify_id) idBySpotify.set(row.spotify_id, row.id);
-          }
+            .eq('id', id);
         }
       }
 
-      // Anything without a spotify id falls back to the single-add path.
-      const fallback = unique.filter((a) => !a.spotify_id);
-      for (const a of fallback) {
-        await addArtist(a, source);
-      }
-
-      // Link all the resolved artists to the user, preserving listening rank.
-      const links = Array.from(idBySpotify.entries()).map(([spotifyId, artist_id]) => ({
-        user_id: userId,
-        artist_id,
-        source,
-        rank: source === 'spotify' ? rankBySpotify.get(spotifyId) ?? null : null,
-      }));
+      // 5. Link to the user, preserving listening rank for EVERY source (rank was
+      // previously Spotify-only, which threw away Last.fm's play-count ordering).
+      // Dedupe by artist_id so two incoming entries resolving to the same catalog
+      // row can't violate the (user_id, artist_id) primary key in one upsert.
+      const linkByArtist = new Map<string, { user_id: string; artist_id: string; source: ArtistSource; rank: number }>();
+      unique.forEach((a, i) => {
+        const artist_id = rowIdFor.get(a);
+        if (!artist_id || linkByArtist.has(artist_id)) return;
+        linkByArtist.set(artist_id, { user_id: userId, artist_id, source, rank: i });
+      });
+      const links = Array.from(linkByArtist.values());
+      let linked = 0;
       for (const group of chunk(links, 80)) {
         const { error: linkError } = await supabase
           .from('user_artists')
           .upsert(group, { onConflict: 'user_id,artist_id' });
         if (linkError) console.error('importArtists link error:', linkError);
+        else linked += group.length;
       }
 
       await fetchArtists();
-      return links.length + fallback.length;
+      return linked;
     },
-    [userId, addArtist, fetchArtists]
+    [userId, fetchArtists]
   );
 
   const removeArtist = useCallback(
@@ -303,47 +420,37 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
     [userId, fetchArtists]
   );
 
-  // Backfills images + genres for artists imported "bare" (from Liked Songs /
-  // playlists). Runs in the background, separate from the import, throttled to
-  // stay under Spotify's rate limit. Safe to call fire-and-forget.
-  const backfillImages = useCallback(
-    async (token: string) => {
-      if (!userId || backfillingRef.current) return;
-      backfillingRef.current = true;
-      try {
-        const { data } = await supabase
-          .from('user_artists')
-          .select('artist:artists(id, name, spotify_id, image_url, genres)')
-          .eq('user_id', userId);
-        const bare = (data ?? [])
-          .map((r: any) => r.artist)
-          .filter((a: any) => a && a.spotify_id && !a.image_url);
-
-        let updated = 0;
-        for (const a of bare) {
-          const full = await fetchArtistByName(token, a.name, a.spotify_id);
-          if (full && (full.image_url || full.genres?.length)) {
-            await supabase
-              .from('artists')
-              .update({
-                ...(full.image_url && { image_url: full.image_url, thumb_url: full.thumb_url ?? full.image_url }),
-                ...(full.genres?.length && { genres: full.genres }),
-              })
-              .eq('id', a.id);
-            updated += 1;
-            if (updated % 25 === 0) await fetchArtists();
-          }
-          // (Throttling handled globally by the gate in spotifyGet.)
+  /**
+   * Fills in artwork + genres for artists imported "bare" (Last.fm gives names
+   * only; Spotify's Liked Songs/playlists do too). Runs server-side against a
+   * Spotify *app* token, so it works for every user regardless of which service
+   * they connected and never spends their personal rate-limit budget — the old
+   * client-side backfill hammered the user's token and was what triggered
+   * Spotify's long rate-limit penalties. Each call handles a fixed batch, so
+   * loop until it stops making progress. Safe to fire-and-forget.
+   */
+  const runEnrichment = useCallback(async () => {
+    if (enrichingRef.current) return;
+    enrichingRef.current = true;
+    try {
+      for (let i = 0; i < 8; i++) {
+        const { data, error } = await supabase.functions.invoke('enrich-artists', { body: {} });
+        if (error) {
+          console.error('enrich-artists error:', error);
+          break;
         }
-        if (updated > 0) await fetchArtists();
-      } catch (e) {
-        console.error('backfillImages error:', e);
-      } finally {
-        backfillingRef.current = false;
+        // Stop when nothing is left, or when a pass made no progress (some
+        // obscure names have no Spotify match and would be rescanned forever).
+        if (!data?.scanned || !data?.enriched) break;
+        await fetchArtists(); // surface artwork as it lands
       }
-    },
-    [userId, fetchArtists]
-  );
+      await fetchArtists();
+    } catch (e) {
+      console.error('runEnrichment error:', e);
+    } finally {
+      enrichingRef.current = false;
+    }
+  }, [fetchArtists]);
 
   const syncLibrary = useCallback(
     async (token: string, mode: 'replace' | 'merge' = 'merge'): Promise<number> => {
@@ -356,16 +463,13 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
         if (userId) {
           await AsyncStorage.setItem(`encore:lastSync:${userId}`, String(Date.now()));
         }
-        // Enrich the bare (Liked Songs/playlist) artists in the background,
-        // delayed so user-facing fetches (suggestions, genre tabs) get the
-        // shared request queue first.
-        setTimeout(() => void backfillImages(token), 15000);
+        void runEnrichment();
         return count;
       } finally {
         syncingRef.current = false;
       }
     },
-    [userId, importArtists]
+    [userId, importArtists, runEnrichment]
   );
 
   // Last.fm has no OAuth — a public username is enough to read listening data.
@@ -379,20 +483,14 @@ export function ArtistsProvider({ children }: { children: React.ReactNode }) {
         const artists = await getLastfmTopArtists(username);
         if (artists.length === 0) return 0;
         const count = await importArtists(artists, 'lastfm', mode);
-        // Last.fm returns names only — enrich images + genres server-side (via a
-        // Spotify app token) so avatars and genre tabs work, then refresh.
-        try {
-          await supabase.functions.invoke('enrich-artists', { body: {} });
-          await fetchArtists();
-        } catch (e) {
-          console.error('enrich after Last.fm import:', e);
-        }
+        // Last.fm returns names only, so artwork + genres come from enrichment.
+        await runEnrichment();
         return count;
       } finally {
         syncingRef.current = false;
       }
     },
-    [importArtists, fetchArtists]
+    [importArtists, runEnrichment]
   );
 
   // Background re-sync: as listening habits evolve, pull the latest Spotify

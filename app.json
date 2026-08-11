@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Encore",
+    "name": "encore.",
     "slug": "encore",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -23,7 +23,9 @@
         "UIBackgroundModes": [
           "remote-notification"
         ],
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "CFBundleDisplayName": "encore.",
+        "CFBundleName": "encore."
       }
     },
     "android": {

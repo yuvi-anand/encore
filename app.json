@@ -17,7 +17,7 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.yuvianand.encore",
+      "bundleIdentifier": "com.yuvi.encore.app",
       "icon": "./assets/icon.png",
       "infoPlist": {
         "UIBackgroundModes": [
@@ -27,7 +27,7 @@
       }
     },
     "android": {
-      "package": "com.yuvianand.encore",
+      "package": "com.yuvi.encore.app",
       "edgeToEdgeEnabled": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",

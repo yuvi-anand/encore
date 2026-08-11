@@ -90,7 +90,7 @@ wired there:
   → store token → `getAppleMusicLibraryArtists()` → `importArtists('apple_music')`.
 
 **Before it can work on a device (all required):**
-1. Enable **MusicKit** on the App ID `com.yuvianand.encore` in the Apple
+1. Enable **MusicKit** on the App ID `com.yuvi.encore.app` in the Apple
    Developer portal (Identifiers → the App ID → check MusicKit → Save). EAS will
    regenerate the provisioning profile on the next build.
 2. Build from this branch: `eas build --profile preview --platform ios`.

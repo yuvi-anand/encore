@@ -1,5 +1,4 @@
 import * as WebBrowser from 'expo-web-browser';
-import * as AuthSession from 'expo-auth-session';
 import { Artist } from '../types';
 import { supabase } from './supabase';
 
@@ -10,9 +9,11 @@ WebBrowser.maybeCompleteAuthSession();
 const API_KEY = process.env.EXPO_PUBLIC_LASTFM_API_KEY ?? '';
 const BASE = 'https://ws.audioscrobbler.com/2.0/';
 
-// Deep link Last.fm redirects back to after the user authorizes. Must match the
-// Callback URL registered on the Last.fm API account (encore://auth/lastfm).
-const REDIRECT_URI = AuthSession.makeRedirectUri({ scheme: 'encore', path: 'auth/lastfm' });
+// Deep link Last.fm redirects back to after the user authorizes. Hardcoded to
+// exactly match the Callback URL registered on the Last.fm API account —
+// makeRedirectUri's output varies by build type (and can add a slash), and any
+// mismatch makes Last.fm bounce straight back without issuing a token.
+const REDIRECT_URI = 'encore://auth/lastfm';
 
 /**
  * Pulls a query parameter out of a redirect URL without relying on `URL` /

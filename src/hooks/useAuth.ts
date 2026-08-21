@@ -152,26 +152,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signInWithLastfm = useCallback(async (): Promise<{ message: string } | null> => {
-    // Last.fm isn't an OAuth provider, so mint an instant guest (anonymous)
-    // account, then link the Last.fm username. Feels like "continue with Last.fm".
+    // Last.fm isn't an OAuth provider, so this pairs a Last.fm authorization
+    // with an instant guest (anonymous) account.
+    //
+    // ORDER MATTERS. Creating the account first immediately produced a session,
+    // which fired onAuthStateChange, which sent the auth gate navigating into
+    // the app — tearing down the Last.fm web session before the user could sign
+    // in, and stranding them on an empty account. So: authorize with Last.fm
+    // first, and only create an account once we actually have a username.
+    const auth = await authenticateLastfm();
+    if (!auth.ok) {
+      return { message: auth.cancelled ? 'cancelled' : auth.message };
+    }
+    const username = auth.username;
+
     const { data: anon, error: anonErr } = await supabase.auth.signInAnonymously();
     if (anonErr || !anon?.user) {
       return {
         message:
-          'Guest sign-in isn’t enabled yet. Enable anonymous sign-ins in Supabase → Authentication.',
+          anonErr?.message ??
+          'Guest sign-in isn’t enabled. Enable anonymous sign-ins in Supabase → Authentication.',
       };
     }
-    const auth = await authenticateLastfm();
-    if (!auth.ok) {
-      // Don't leave an empty guest account behind if it didn't complete.
-      await supabase.auth.signOut();
-      return { message: auth.cancelled ? 'cancelled' : auth.message };
-    }
-    const username = auth.username;
+
+    // Link the account before anything else reads the profile, so the
+    // background Last.fm import (keyed on profile.lastfm_username) fires.
     await ensureProfile(anon.user.id);
-    await supabase.from('profiles').update({ lastfm_username: username }).eq('id', anon.user.id);
-    // Refresh local profile so the background Last.fm import (keyed on
-    // profile.lastfm_username) fires immediately.
+    const { error: linkErr } = await supabase
+      .from('profiles')
+      .update({ lastfm_username: username })
+      .eq('id', anon.user.id);
+    if (linkErr) {
+      console.error('failed to link Last.fm username:', linkErr);
+      await supabase.auth.signOut();
+      return { message: `Signed in to Last.fm, but couldn’t save it: ${linkErr.message}` };
+    }
     const refreshed = await ensureProfile(anon.user.id);
     if (refreshed) setProfile(refreshed);
     return null;

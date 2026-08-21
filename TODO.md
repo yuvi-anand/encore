@@ -8,9 +8,14 @@
       Fix: enrich via a Spotify **client-credentials** app token (search each
       name → image + genres), ideally in an edge function so the secret stays
       server-side. Highest-value gap now that Last.fm is the primary import.
-- [ ] **Apple Music — Part 2 (library import).** Part 1 (developer token) is
-      done. Needs a native MusicKit module for the Music User Token + a rebuild.
-      See docs/apple-music-setup.md. `getAppleMusicLibraryArtists()` is ready.
+- [ ] **Apple Music — validate and ship.** Code is COMPLETE on the
+      `apple-musickit` branch (module, provider, connect + library import), the
+      developer token is generated, and MusicKit is enabled on the App ID — so
+      nothing is left to build. It is blocked purely on testing: MusicKit auth
+      and library reads require a device with an ACTIVE Apple Music
+      subscription, which we don't have. Options: a tester who has one, or a
+      1-month free trial. Until then main keeps it as "Coming soon".
+      See docs/apple-music-setup.md.
 - [ ] **Feed radius fix.** The feed filters by home-city *name match*, not the
       radius slider (Touring tab uses real distance). Make the feed use
       distance/radius so nearby-suburb shows appear.

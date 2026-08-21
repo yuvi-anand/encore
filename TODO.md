@@ -9,9 +9,6 @@
       subscription, which we don't have. Options: a tester who has one, or a
       1-month free trial. Until then main keeps it as "Coming soon".
       See docs/apple-music-setup.md.
-- [ ] **Feed radius fix.** The feed filters by home-city *name match*, not the
-      radius slider (Touring tab uses real distance). Make the feed use
-      distance/radius so nearby-suburb shows appear.
 
 ## Backlog
 - [ ] **Concert tracking + achievements** (one unified feature) — mark shows
@@ -24,6 +21,9 @@
       proven stable in the wild (keep the kill-switch pattern).
 
 ## Done recently
+- [x] Feed radius — the feed now filters by real distance against the radius
+      setting instead of city-name matching, so nearby-suburb shows appear and
+      the slider actually does something.
 - [x] Last.fm artist enrichment — `enrich-artists` edge function fills artwork +
       genres via a Spotify app token (works for users with no Spotify login, and
       never spends a user's own rate limit). Runs after every import until done.

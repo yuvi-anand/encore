@@ -1,13 +1,6 @@
 # Encore — TODO
 
 ## Next up
-- [ ] **Last.fm artist enrichment (images + genres).** Last.fm returns name-only
-      artists, and the existing backfill uses the *user's Spotify token* — which
-      Last.fm-only users don't have. So imported artists show letter avatars AND
-      have no genres, which breaks the genre tabs/filtering for Last.fm users.
-      Fix: enrich via a Spotify **client-credentials** app token (search each
-      name → image + genres), ideally in an edge function so the secret stays
-      server-side. Highest-value gap now that Last.fm is the primary import.
 - [ ] **Apple Music — validate and ship.** Code is COMPLETE on the
       `apple-musickit` branch (module, provider, connect + library import), the
       developer token is generated, and MusicKit is enabled on the App ID — so
@@ -31,6 +24,12 @@
       proven stable in the wild (keep the kill-switch pattern).
 
 ## Done recently
+- [x] Last.fm artist enrichment — `enrich-artists` edge function fills artwork +
+      genres via a Spotify app token (works for users with no Spotify login, and
+      never spends a user's own rate limit). Runs after every import until done.
+- [x] Last.fm sign-in fix — the redirect token was parsed with URL/searchParams,
+      which React Native doesn't handle for custom schemes, so sign-in failed
+      silently. Same latent bug fixed in the Spotify code exchange.
 - [x] Notification floods fixed (1000-row pagination cap + ticketmaster_id dedup
       + baseline/settle/cap); dry-run verified; re-enabled.
 - [x] Last.fm **web login flow** (opens Last.fm sign-in) + import + 12h re-sync.

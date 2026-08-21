@@ -181,12 +181,22 @@ export default function LoginScreen() {
               <View style={styles.spotifyButtonInner}>
                 <FontAwesome name="lastfm" size={20} color="#fff" />
                 <Text style={styles.spotifyButtonText}>Continue with Last.fm</Text>
+                <View style={styles.recommendedPill}>
+                  <Text style={styles.recommendedPillText}>RECOMMENDED</Text>
+                </View>
               </View>
             )}
           </TouchableOpacity>
 
+          {/* Spotify is capped at 25 whitelisted testers during beta, so steer
+              everyone else to Last.fm before they hit the tester-code prompt. */}
+          <Text style={styles.serviceHint}>
+            Spotify listener? Use Last.fm — it imports the same artists. Spotify sign-in is
+            invite-only during the beta.
+          </Text>
+
           <TouchableOpacity
-            style={styles.spotifyButton}
+            style={[styles.spotifyButton, styles.spotifyButtonMuted]}
             onPress={handleSpotify}
             disabled={spotifyLoading}
           >
@@ -196,6 +206,7 @@ export default function LoginScreen() {
               <View style={styles.spotifyButtonInner}>
                 <FontAwesome name="spotify" size={20} color="#fff" />
                 <Text style={styles.spotifyButtonText}>Continue with Spotify</Text>
+                <Text style={styles.inviteOnlyTag}>invite only</Text>
               </View>
             )}
           </TouchableOpacity>
@@ -304,6 +315,37 @@ const styles = StyleSheet.create({
   },
   lastfmButton: {
     backgroundColor: '#D51007',
+  },
+  spotifyButtonMuted: {
+    // De-emphasised: usable, but not the path most people should take in beta.
+    backgroundColor: '#14532b',
+  },
+  recommendedPill: {
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginLeft: 2,
+  },
+  recommendedPillText: {
+    color: '#fff',
+    fontSize: 9,
+    fontFamily: 'Inter_700Bold',
+    letterSpacing: 0.5,
+  },
+  inviteOnlyTag: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+  },
+  serviceHint: {
+    color: COLORS.muted,
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    textAlign: 'center',
+    lineHeight: 17,
+    marginTop: -4,
+    paddingHorizontal: 8,
   },
   appleMusicButton: {
     backgroundColor: '#FA243C',

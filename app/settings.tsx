@@ -185,11 +185,14 @@ export default function SettingsScreen() {
   const handleConnectLastfm = async () => {
     setConnectingLastfm(true);
     // Opens Last.fm's login/sign-up page; returns the verified username.
-    const username = await authenticateLastfm();
-    if (!username) {
+    const auth = await authenticateLastfm();
+    if (!auth.ok) {
       setConnectingLastfm(false);
-      return; // user cancelled or auth failed
+      // Stay quiet if they backed out, but surface anything that actually broke.
+      if (!auth.cancelled) Alert.alert('Last.fm sign-in failed', auth.message);
+      return;
     }
+    const username = auth.username;
     await updateProfile({ lastfm_username: username });
     setConnectingLastfm(false);
     Alert.alert(

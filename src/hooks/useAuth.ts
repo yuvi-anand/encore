@@ -124,8 +124,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     // The redirect carries an auth code we exchange for a Supabase session.
-    const url = new URL(result.url);
-    const code = url.searchParams.get('code');
+    // Parsed by hand because React Native's URL doesn't reliably expose
+    // searchParams for custom-scheme URLs (encore://...).
+    const codeMatch = result.url.match(/[?&]code=([^&#]+)/);
+    const code = codeMatch ? decodeURIComponent(codeMatch[1]) : null;
     if (!code) return { message: 'No authorization code returned from Spotify.' };
 
     const { data: sessionData, error: exchangeError } =
@@ -159,12 +161,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           'Guest sign-in isn’t enabled yet. Enable anonymous sign-ins in Supabase → Authentication.',
       };
     }
-    const username = await authenticateLastfm();
-    if (!username) {
-      // Cancelled — don't leave an empty guest account lying around.
+    const auth = await authenticateLastfm();
+    if (!auth.ok) {
+      // Don't leave an empty guest account behind if it didn't complete.
       await supabase.auth.signOut();
-      return { message: 'cancelled' };
+      return { message: auth.cancelled ? 'cancelled' : auth.message };
     }
+    const username = auth.username;
     await ensureProfile(anon.user.id);
     await supabase.from('profiles').update({ lastfm_username: username }).eq('id', anon.user.id);
     // Refresh local profile so the background Last.fm import (keyed on

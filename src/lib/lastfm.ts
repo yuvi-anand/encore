@@ -15,32 +15,72 @@ const BASE = 'https://ws.audioscrobbler.com/2.0/';
 const REDIRECT_URI = AuthSession.makeRedirectUri({ scheme: 'encore', path: 'auth/lastfm' });
 
 /**
+ * Pulls a query parameter out of a redirect URL without relying on `URL` /
+ * `searchParams`. React Native's URL implementation does not reliably parse the
+ * query string of a custom-scheme URL like `encore://auth/lastfm?token=...`,
+ * which silently yielded a null token and made the whole sign-in look like it
+ * did nothing at all.
+ */
+function paramFromUrl(url: string, name: string): string | null {
+  const m = url.match(new RegExp(`[?&]${name}=([^&#]+)`));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+export type LastfmAuthResult =
+  | { ok: true; username: string }
+  | { ok: false; cancelled: boolean; message: string };
+
+/**
  * Opens Last.fm's own login/sign-up page in a web auth session. After the user
  * signs in (or creates an account) and authorizes, Last.fm redirects back with
  * a one-time token, which we exchange — server-side, via the `lastfm-auth` edge
  * function that holds the shared secret — for the account username. The secret
- * never ships in the app. Returns the username, or null if cancelled/failed.
+ * never ships in the app.
+ *
+ * Returns a discriminated result rather than null-on-everything, so callers can
+ * tell "the user backed out" apart from "something is actually broken" and show
+ * a real message instead of failing silently.
  */
-export async function authenticateLastfm(): Promise<string | null> {
+export async function authenticateLastfm(): Promise<LastfmAuthResult> {
+  if (!API_KEY) {
+    return { ok: false, cancelled: false, message: 'Last.fm is not configured (missing API key).' };
+  }
   try {
-    const authUrl = `https://www.last.fm/api/auth/?api_key=${API_KEY}&cb=${encodeURIComponent(REDIRECT_URI)}`;
+    // No trailing slash: Last.fm 301s `/api/auth/` -> `/api/auth`.
+    const authUrl =
+      `https://www.last.fm/api/auth?api_key=${API_KEY}&cb=${encodeURIComponent(REDIRECT_URI)}`;
     const result = await WebBrowser.openAuthSessionAsync(authUrl, REDIRECT_URI);
-    if (result.type !== 'success' || !result.url) return null;
 
-    const token = new URL(result.url).searchParams.get('token');
-    if (!token) return null;
-
-    const { data, error } = await supabase.functions.invoke('lastfm-auth', {
-      body: { token },
-    });
-    if (error || !data?.username) {
-      console.error('lastfm-auth exchange failed:', error ?? data);
-      return null;
+    if (result.type === 'cancel' || result.type === 'dismiss') {
+      return { ok: false, cancelled: true, message: 'cancelled' };
     }
-    return data.username as string;
-  } catch (e) {
+    if (result.type !== 'success' || !result.url) {
+      return { ok: false, cancelled: false, message: `Sign-in didn’t complete (${result.type}).` };
+    }
+
+    const token = paramFromUrl(result.url, 'token');
+    if (!token) {
+      console.error('lastfm: no token in redirect', result.url);
+      return { ok: false, cancelled: false, message: 'Last.fm didn’t return an access token.' };
+    }
+
+    const { data, error } = await supabase.functions.invoke('lastfm-auth', { body: { token } });
+    if (error) {
+      console.error('lastfm-auth invoke failed:', error);
+      return { ok: false, cancelled: false, message: `Couldn’t verify with Last.fm: ${error.message}` };
+    }
+    if (!data?.username) {
+      console.error('lastfm-auth returned no username:', data);
+      return {
+        ok: false,
+        cancelled: false,
+        message: data?.error ? `Last.fm: ${data.error}` : 'Last.fm didn’t return an account name.',
+      };
+    }
+    return { ok: true, username: data.username as string };
+  } catch (e: any) {
     console.error('authenticateLastfm error:', e);
-    return null;
+    return { ok: false, cancelled: false, message: e?.message ?? 'Unexpected error signing in.' };
   }
 }
 

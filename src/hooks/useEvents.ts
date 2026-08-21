@@ -1,13 +1,35 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { syncArtistEvents, chunk } from '../lib/events';
-import { Event, Artist, HomeCity } from '../types';
+import { Event, Artist, HomeCity, distanceMiles } from '../types';
 
 type EventRow = Event & { artist: Artist };
 
-/** Whether an event's city matches one of the user's home cities. */
-function matchesHomeCity(event: Pick<Event, 'venue_city'>, homeCities: HomeCity[]): boolean {
+/**
+ * Whether a show is close enough to one of the user's home cities to belong in
+ * the feed.
+ *
+ * Uses real distance against the user's radius setting. This previously matched
+ * on city *name*, which ignored the radius slider entirely and hid shows in
+ * neighbouring towns — a venue 10 miles away in the next suburb simply never
+ * appeared. Name matching is kept only as a fallback for events (or home cities)
+ * that have no coordinates.
+ */
+function matchesHomeArea(
+  event: Pick<Event, 'venue_city' | 'venue_lat' | 'venue_lng'>,
+  homeCities: HomeCity[],
+  radiusMiles: number
+): boolean {
   if (homeCities.length === 0) return true; // no filter set → show everything
+
+  const homesWithCoords = homeCities.filter((c) => c.lat !== 0 || c.lng !== 0);
+  if (event.venue_lat != null && event.venue_lng != null && homesWithCoords.length > 0) {
+    return homesWithCoords.some(
+      (c) => distanceMiles(c.lat, c.lng, event.venue_lat as number, event.venue_lng as number) <= radiusMiles
+    );
+  }
+
+  // No coordinates on one side — fall back to comparing city names.
   const venue = (event.venue_city ?? '').toLowerCase().trim();
   if (!venue) return false;
   return homeCities.some((c) => {
@@ -56,12 +78,12 @@ export function useEvents(
 
     if (!failed || collected.length > 0) {
       const rows = collected
-        .filter((e) => matchesHomeCity(e, homeCities))
+        .filter((e) => matchesHomeArea(e, homeCities, radiusMiles))
         .sort((a, b) => new Date(a.event_date).getTime() - new Date(b.event_date).getTime());
       setEvents(rows);
     }
     setLoading(false);
-  }, [userId, artistIds, homeCities]);
+  }, [userId, artistIds, homeCities, radiusMiles]);
 
   useEffect(() => {
     fetchEvents();

@@ -32,7 +32,7 @@ const COLORS = {
   border: '#222',
 };
 
-const TOTAL_STEPS = 3;
+const TOTAL_STEPS = 4;
 
 export default function OnboardingScreen() {
   const [step, setStep] = useState(0);
@@ -44,6 +44,8 @@ export default function OnboardingScreen() {
   const [selectedArtistIds, setSelectedArtistIds] = useState<Set<string>>(new Set());
   const [cityInput, setCityInput] = useState('');
   const [homeCities, setHomeCities] = useState<HomeCity[]>([]);
+  const [fullName, setFullName] = useState('');
+  const [username, setUsername] = useState('');
   const [saving, setSaving] = useState(false);
 
   const { updateProfile } = useAuth();
@@ -98,9 +100,9 @@ export default function OnboardingScreen() {
       if (!auth.cancelled) Alert.alert('Last.fm sign-in failed', auth.message);
       return;
     }
-    const username = auth.username;
-    await updateProfile({ lastfm_username: username });
-    const artists = await getLastfmTopArtists(username);
+    const lastfmUser = auth.username;
+    await updateProfile({ lastfm_username: lastfmUser });
+    const artists = await getLastfmTopArtists(lastfmUser);
     setTopArtists(artists);
     setSelectedArtistIds(new Set(artists.map((a, i) => a.spotify_id ?? String(i))));
     setConnectedSource('lastfm');
@@ -135,9 +137,11 @@ export default function OnboardingScreen() {
   const handleFinish = async () => {
     setSaving(true);
     try {
-      if (homeCities.length > 0) {
-        await updateProfile({ home_cities: homeCities });
-      }
+      await updateProfile({
+        full_name: fullName.trim(),
+        username: username.trim(),
+        ...(homeCities.length > 0 && { home_cities: homeCities }),
+      });
 
       // Import selected artists in one batch.
       const selectedArtists = topArtists.filter((a, i) =>
@@ -162,6 +166,13 @@ export default function OnboardingScreen() {
       lastfmConnecting={lastfmConnecting}
       onConnectLastfm={handleLastfmConnect}
     />,
+    <StepProfile
+      key="profile"
+      fullName={fullName}
+      username={username}
+      onChangeFullName={setFullName}
+      onChangeUsername={setUsername}
+    />,
     <StepCity
       key="city"
       input={cityInput}
@@ -179,12 +190,25 @@ export default function OnboardingScreen() {
     />,
   ];
 
-  const stepTitles = ['Connect Music', 'Home City', 'Your Artists'];
+  const stepTitles = ['Connect Music', 'Your Profile', 'Home City', 'Your Artists'];
   const stepDescriptions = [
     'Connect your streaming accounts to import artists.',
-    'Set up to 3 cities to track shows near you.',
+    'Tell us what to call you.',
+    'Add at least one city to track shows near you.',
     'Confirm the artists you want to follow.',
   ];
+
+  // Required before moving on: a name and username on the profile step, and at
+  // least one home city. Connecting a service is still optional.
+  const canAdvance =
+    step === 1
+      ? fullName.trim().length > 0 && username.trim().length >= 3
+      : step === 2
+        ? homeCities.length > 0
+        : true;
+
+  const profileComplete =
+    fullName.trim().length > 0 && username.trim().length >= 3 && homeCities.length > 0;
 
   return (
     <View style={styles.container}>
@@ -214,16 +238,21 @@ export default function OnboardingScreen() {
         )}
         {step < TOTAL_STEPS - 1 ? (
           <TouchableOpacity
-            style={[styles.continueButton, step === 0 && { flex: 1 }]}
-            onPress={() => setStep((s) => s + 1)}
+            style={[
+              styles.continueButton,
+              step === 0 && { flex: 1 },
+              !canAdvance && styles.continueButtonDisabled,
+            ]}
+            onPress={() => canAdvance && setStep((s) => s + 1)}
+            disabled={!canAdvance}
           >
             <Text style={styles.continueButtonText}>Continue</Text>
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
-            style={styles.continueButton}
-            onPress={handleFinish}
-            disabled={saving}
+            style={[styles.continueButton, !profileComplete && styles.continueButtonDisabled]}
+            onPress={() => profileComplete && handleFinish()}
+            disabled={saving || !profileComplete}
           >
             {saving ? (
               <ActivityIndicator color="#fff" />
@@ -299,6 +328,53 @@ function StepConnect({
       </View>
 
       <Text style={stepStyles.skipNote}>You can skip this and add artists manually.</Text>
+    </View>
+  );
+}
+
+function StepProfile({
+  fullName,
+  username,
+  onChangeFullName,
+  onChangeUsername,
+}: {
+  fullName: string;
+  username: string;
+  onChangeFullName: (v: string) => void;
+  onChangeUsername: (v: string) => void;
+}) {
+  const usernameTooShort = username.trim().length > 0 && username.trim().length < 3;
+  return (
+    <View style={stepStyles.container}>
+      <Text style={stepStyles.fieldLabel}>Name</Text>
+      <TextInput
+        style={stepStyles.cityInput}
+        placeholder="Your name"
+        placeholderTextColor="#555"
+        value={fullName}
+        onChangeText={onChangeFullName}
+        autoCapitalize="words"
+        returnKeyType="next"
+        maxLength={50}
+      />
+
+      <Text style={[stepStyles.fieldLabel, { marginTop: 18 }]}>Username</Text>
+      <TextInput
+        style={stepStyles.cityInput}
+        placeholder="username"
+        placeholderTextColor="#555"
+        value={username}
+        onChangeText={(v) => onChangeUsername(v.replace(/\s/g, '').toLowerCase())}
+        autoCapitalize="none"
+        autoCorrect={false}
+        returnKeyType="done"
+        maxLength={30}
+      />
+      <Text style={stepStyles.fieldHint}>
+        {usernameTooShort
+          ? 'Username must be at least 3 characters.'
+          : 'Letters and numbers, no spaces. This is how friends will find you.'}
+      </Text>
     </View>
   );
 }
@@ -459,6 +535,19 @@ const stepStyles = StyleSheet.create({
   lastfmButton: {
     backgroundColor: '#D51007',
   },
+  fieldLabel: {
+    color: '#fff',
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    marginBottom: 8,
+  },
+  fieldHint: {
+    color: '#555',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    marginTop: 8,
+    lineHeight: 17,
+  },
   comingSoonButton: {
     backgroundColor: 'transparent',
     borderRadius: 8,
@@ -610,6 +699,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 16,
     alignItems: 'center',
+  },
+  continueButtonDisabled: {
+    backgroundColor: '#2a2a2a',
   },
   continueButtonText: {
     color: '#fff',

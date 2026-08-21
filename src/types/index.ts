@@ -31,6 +31,8 @@ export function distanceMiles(
 
 export interface Profile {
   id: string;
+  /** Display name the user enters during onboarding. */
+  full_name: string | null;
   username: string | null;
   home_cities: HomeCity[];
   notification_radius_miles: number;

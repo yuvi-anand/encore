@@ -83,3 +83,8 @@ create index if not exists artists_last_checked_at_idx on artists (last_checked_
 -- connection never persisted and the background import (which keys off
 -- profiles.lastfm_username) never ran.
 alter table profiles add column if not exists lastfm_username text;
+
+-- 5. Onboarding profile fields ----------------------------------------------
+-- Every new account must set a display name, username and at least one home
+-- city before reaching the app, including accounts created via Last.fm.
+alter table profiles add column if not exists full_name text;

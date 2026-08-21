@@ -35,7 +35,8 @@ export default function ProfileScreen() {
   const { user, profile } = useAuth();
   const { userArtists } = useArtists();
 
-  const displayName = profile?.username || user?.email?.split('@')[0] || 'You';
+  const displayName = profile?.full_name || profile?.username || user?.email?.split('@')[0] || 'You';
+  const handle = profile?.username ? `@${profile.username}` : null;
   const initial = displayName.charAt(0).toUpperCase();
 
   const memberSince = profile?.created_at
@@ -64,7 +65,8 @@ export default function ProfileScreen() {
             <Text style={styles.avatarText}>{initial}</Text>
           </View>
           <Text style={styles.name} numberOfLines={1}>{displayName}</Text>
-          {user?.email ? <Text style={styles.email} numberOfLines={1}>{user.email}</Text> : null}
+          {handle ? <Text style={styles.email} numberOfLines={1}>{handle}</Text> : null}
+          {user?.email ? <Text style={styles.since} numberOfLines={1}>{user.email}</Text> : null}
           {memberSince ? <Text style={styles.since}>Member since {memberSince}</Text> : null}
         </View>
 

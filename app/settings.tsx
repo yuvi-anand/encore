@@ -67,16 +67,35 @@ export default function SettingsScreen() {
   const [connectingSpotify, setConnectingSpotify] = useState(false);
   const [connectingLastfm, setConnectingLastfm] = useState(false);
   const [username, setUsername] = useState(profile?.username ?? '');
+  const [fullName, setFullName] = useState(profile?.full_name ?? '');
 
-  // Keep the field in sync if the profile loads or changes after mount.
+  // Keep the fields in sync if the profile loads or changes after mount.
   useEffect(() => {
     setUsername(profile?.username ?? '');
   }, [profile?.username]);
+  useEffect(() => {
+    setFullName(profile?.full_name ?? '');
+  }, [profile?.full_name]);
 
   const saveUsername = async () => {
     const trimmed = username.trim();
     if (trimmed === (profile?.username ?? '')) return;
-    await updateProfile({ username: trimmed || null });
+    // Username is required, so don't let it be cleared.
+    if (!trimmed) {
+      setUsername(profile?.username ?? '');
+      return;
+    }
+    await updateProfile({ username: trimmed });
+  };
+
+  const saveFullName = async () => {
+    const trimmed = fullName.trim();
+    if (trimmed === (profile?.full_name ?? '')) return;
+    if (!trimmed) {
+      setFullName(profile?.full_name ?? '');
+      return;
+    }
+    await updateProfile({ full_name: trimmed });
   };
 
   const homeCities: HomeCity[] = profile?.home_cities ?? [];
@@ -192,16 +211,16 @@ export default function SettingsScreen() {
       if (!auth.cancelled) Alert.alert('Last.fm sign-in failed', auth.message);
       return;
     }
-    const username = auth.username;
-    await updateProfile({ lastfm_username: username });
+    const lastfmUser = auth.username;
+    await updateProfile({ lastfm_username: lastfmUser });
     setConnectingLastfm(false);
     Alert.alert(
       'Last.fm connected',
-      `Signed in as ${username}. We’re importing the artists you listen to in the background — they’ll appear shortly.`
+      `Signed in as ${lastfmUser}. We’re importing the artists you listen to in the background — they’ll appear shortly.`
     );
     (async () => {
       try {
-        const count = await syncLastfm(username, 'replace');
+        const count = await syncLastfm(lastfmUser, 'replace');
         await sendLocalNotification(
           'Library imported',
           count > 0
@@ -260,6 +279,22 @@ export default function SettingsScreen() {
         {/* Profile */}
         <SectionHeader title="Profile" />
         <View style={styles.section}>
+          <View style={styles.profileRow}>
+            <Text style={styles.rowLabel}>Name</Text>
+            <TextInput
+              style={styles.usernameInput}
+              value={fullName}
+              onChangeText={setFullName}
+              onBlur={saveFullName}
+              onSubmitEditing={saveFullName}
+              placeholder="Your name"
+              placeholderTextColor="#444"
+              autoCapitalize="words"
+              returnKeyType="done"
+              maxLength={50}
+            />
+          </View>
+          <View style={styles.separator} />
           <View style={styles.profileRow}>
             <Text style={styles.rowLabel}>Username</Text>
             <TextInput

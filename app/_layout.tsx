@@ -17,7 +17,7 @@ function Loading() {
 }
 
 function AuthGate({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
   const segments = useSegments();
 
   useEffect(() => {
@@ -26,14 +26,34 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     const onOnboarding = inAuthGroup && segments[1] === 'onboarding';
     const onSplash = (segments as string[]).length === 0; // the index/splash route
 
-    if (!user && !inAuthGroup) {
-      router.replace('/(auth)/login');
-    } else if (user && (onSplash || (inAuthGroup && !onOnboarding))) {
-      // Move logged-in users off the splash and auth screens into the app, but
-      // leave them alone on other valid routes (tabs, /account, etc.).
+    if (!user) {
+      if (!inAuthGroup) router.replace('/(auth)/login');
+      return;
+    }
+
+    // Wait for the profile before deciding — redirecting on a null profile would
+    // bounce people out of onboarding mid-flow.
+    if (!profile) return;
+
+    // Onboarding is mandatory for every account, however it was created. Signing
+    // up through Last.fm or Spotify used to drop straight into the app, so those
+    // users never set a name, username or home city.
+    const needsOnboarding =
+      !profile.full_name?.trim() ||
+      !profile.username?.trim() ||
+      (profile.home_cities?.length ?? 0) === 0;
+
+    if (needsOnboarding) {
+      if (!onOnboarding) router.replace('/(auth)/onboarding');
+      return;
+    }
+
+    if (onSplash || inAuthGroup) {
+      // Move fully set-up users off the splash and auth screens into the app,
+      // but leave them alone on other valid routes (tabs, /account, etc.).
       router.replace('/(tabs)/feed');
     }
-  }, [user, loading, segments]);
+  }, [user, profile, loading, segments]);
 
   // Register for push notifications once the user is known.
   useEffect(() => {

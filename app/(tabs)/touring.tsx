@@ -47,7 +47,9 @@ export default function TouringScreen() {
   const { profile } = useAuth();
   const { userArtists } = useArtists();
   const artistIds = useMemo(() => userArtists.map((ua) => ua.artist_id), [userArtists]);
-  const homeCities = profile?.home_cities ?? [];
+  // Memoized for the same reason as the feed: a new array each render would
+  // recompute the touring rows constantly.
+  const homeCities = useMemo(() => profile?.home_cities ?? [], [profile?.home_cities]);
   const radius = profile?.notification_radius_miles ?? 50;
 
   const [events, setEvents] = useState<(Event & { artist: Artist })[]>([]);

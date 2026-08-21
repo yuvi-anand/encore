@@ -50,7 +50,9 @@ export async function authenticateLastfm(): Promise<LastfmAuthResult> {
     // No trailing slash: Last.fm 301s `/api/auth/` -> `/api/auth`.
     const authUrl =
       `https://www.last.fm/api/auth?api_key=${API_KEY}&cb=${encodeURIComponent(REDIRECT_URI)}`;
+    console.log('[lastfm] opening', authUrl, '-> redirect', REDIRECT_URI);
     const result = await WebBrowser.openAuthSessionAsync(authUrl, REDIRECT_URI);
+    console.log('[lastfm] session result:', JSON.stringify(result));
 
     if (result.type === 'cancel' || result.type === 'dismiss') {
       return { ok: false, cancelled: true, message: 'cancelled' };

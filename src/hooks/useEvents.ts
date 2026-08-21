@@ -49,7 +49,22 @@ export function useEvents(
   const [refreshing, setRefreshing] = useState(false);
   const autoRefreshedFor = useRef<string>('');
 
+  // Depend on the *contents* of these props, not their identity. Callers
+  // naturally write `profile?.home_cities ?? []`, which allocates a new array
+  // every render; keying the fetch callback off that identity made it a new
+  // function each render, so the effect below re-ran on every render, set state,
+  // and re-rendered — an infinite loop ("Maximum update depth exceeded").
+  const artistKey = artistIds.join(',');
+  const homeKey = JSON.stringify(homeCities.map((c) => [c.city, c.lat, c.lng]));
+  // Latest values for use inside the callback without widening its deps.
+  const artistIdsRef = useRef(artistIds);
+  artistIdsRef.current = artistIds;
+  const homeCitiesRef = useRef(homeCities);
+  homeCitiesRef.current = homeCities;
+
   const fetchEvents = useCallback(async () => {
+    const artistIds = artistIdsRef.current;
+    const homeCities = homeCitiesRef.current;
     if (!userId || artistIds.length === 0) {
       setEvents([]);
       setLoading(false);
@@ -83,29 +98,35 @@ export function useEvents(
       setEvents(rows);
     }
     setLoading(false);
-  }, [userId, artistIds, homeCities, radiusMiles]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, artistKey, homeKey, radiusMiles]);
 
   useEffect(() => {
     fetchEvents();
   }, [fetchEvents]);
 
   const refreshEvents = useCallback(async () => {
-    if (!userId || artistIds.length === 0) return;
+    const ids = artistIdsRef.current;
+    if (!userId || ids.length === 0) return;
     setRefreshing(true);
-    await syncArtistEvents(artistIds);
+    await syncArtistEvents(ids);
     await fetchEvents();
     setRefreshing(false);
-  }, [userId, artistIds, fetchEvents]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, artistKey, fetchEvents]);
 
   // Auto-fetch shows the first time we have artists, so the feed populates
   // without the user having to pull-to-refresh.
   useEffect(() => {
-    if (!userId || artistIds.length === 0) return;
-    const key = `${userId}:${artistIds.length}`;
-    if (autoRefreshedFor.current === key) return;
-    autoRefreshedFor.current = key;
+    if (!userId || !artistKey) return;
+    // Only auto-sync once per user per app session. Keying this on the artist
+    // count meant every step of an import (which changes the count) kicked off
+    // another full Ticketmaster sync.
+    if (autoRefreshedFor.current === userId) return;
+    autoRefreshedFor.current = userId;
     refreshEvents();
-  }, [userId, artistIds, refreshEvents]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, artistKey]);
 
   return {
     events,

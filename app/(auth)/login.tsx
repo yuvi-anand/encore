@@ -63,8 +63,10 @@ export default function LoginScreen() {
   };
 
   const handleLastfm = async () => {
+    console.log('[lastfm] button tapped');
     setLastfmLoading(true);
     const error = await signInWithLastfm();
+    console.log('[lastfm] signInWithLastfm returned:', JSON.stringify(error));
     setLastfmLoading(false);
     if (error && error.message !== 'cancelled') {
       Alert.alert('Last.fm sign-in failed', error.message);

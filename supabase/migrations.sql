@@ -77,3 +77,9 @@ create index if not exists artists_last_checked_at_idx on artists (last_checked_
 -- limited to ~2h. To switch to hourly:
 --   select cron.unschedule('encore-sync-events');
 --   -- then re-run the cron.schedule above with '0 * * * *' instead of '0 */4 * * *'.
+
+-- 4. Last.fm account link ----------------------------------------------------
+-- Without this column every attempt to save a Last.fm connection failed, so the
+-- connection never persisted and the background import (which keys off
+-- profiles.lastfm_username) never ran.
+alter table profiles add column if not exists lastfm_username text;

@@ -34,7 +34,9 @@ export default function FeedScreen() {
     () => userArtists.map((ua) => ua.artist_id),
     [userArtists]
   );
-  const homeCities = profile?.home_cities ?? [];
+  // Memoized: `?? []` allocates a fresh array every render, and an unstable
+  // identity here used to cascade into a render loop inside useEvents.
+  const homeCities = useMemo(() => profile?.home_cities ?? [], [profile?.home_cities]);
   const radius = profile?.notification_radius_miles ?? 50;
 
   const { events, loading, refreshing, refreshEvents } = useEvents(

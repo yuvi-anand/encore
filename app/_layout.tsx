@@ -2,19 +2,12 @@ import React, { useEffect } from 'react';
 import { Stack, router, useSegments } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator } from 'react-native';
+import { InteractionManager } from 'react-native';
 import { useFonts, Inter_400Regular, Inter_600SemiBold, Inter_700Bold } from '@expo-google-fonts/inter';
 import { AuthProvider, useAuth } from '../src/hooks/useAuth';
 import { ArtistsProvider } from '../src/hooks/useArtists';
 import { registerForPushNotifications, savePushToken } from '../src/lib/notifications';
-
-function Loading() {
-  return (
-    <View style={{ flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' }}>
-      <ActivityIndicator color="#6C63FF" />
-    </View>
-  );
-}
+import { SplashView } from '../src/components/SplashView';
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, profile, loading } = useAuth();
@@ -55,16 +48,21 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     }
   }, [user, profile, loading, segments]);
 
-  // Register for push notifications once the user is known.
+  // Register for push notifications once the user is known — but only after
+  // the first screens have settled. Fetching an Expo push token is a network
+  // round trip, and running it during startup made it compete with the session
+  // and profile queries that actually gate the UI.
   useEffect(() => {
-    if (user) {
+    if (!user) return;
+    const task = InteractionManager.runAfterInteractions(() => {
       registerForPushNotifications().then((token) => {
         if (token) savePushToken(user.id, token);
       });
-    }
+    });
+    return () => task.cancel();
   }, [user]);
 
-  if (loading) return <Loading />;
+  if (loading) return <SplashView />;
 
   return <>{children}</>;
 }
@@ -76,7 +74,7 @@ export default function RootLayout() {
     Inter_700Bold,
   });
 
-  if (!fontsLoaded) return <Loading />;
+  if (!fontsLoaded) return <SplashView />;
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>

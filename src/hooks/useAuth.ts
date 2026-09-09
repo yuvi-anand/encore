@@ -61,28 +61,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let mounted = true;
+    // Which user we've already loaded a profile for. On startup getSession()
+    // and onAuthStateChange('INITIAL_SESSION') both fire, and every token
+    // refresh fires again — each one used to re-run the profile query, so a
+    // cold start paid for it two or three times before rendering anything.
+    let loadedFor: string | null = null;
 
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    const applySession = async (session: Session | null, allowSkip: boolean) => {
       if (!mounted) return;
       setSession(session);
       setUser(session?.user ?? null);
-      if (session?.user) {
-        const p = await ensureProfile(session.user.id);
-        if (mounted) setProfile(p);
+
+      const userId = session?.user?.id ?? null;
+      if (!userId) {
+        loadedFor = null;
+        setProfile(null);
+        return;
       }
+      if (allowSkip && loadedFor === userId) return;
+      loadedFor = userId;
+      const p = await ensureProfile(userId);
+      if (mounted) setProfile(p);
+    };
+
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      await applySession(session, true);
       if (mounted) setLoading(false);
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (!mounted) return;
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        const p = await ensureProfile(session.user.id);
-        if (mounted) setProfile(p);
-      } else {
-        setProfile(null);
-      }
+    const { data: listener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      // A sign-in must always refetch: signInWithLastfm writes to the profile
+      // between creating the account and this firing.
+      await applySession(session, event !== 'SIGNED_IN');
     });
 
     return () => {

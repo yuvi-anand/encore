@@ -1,6 +1,16 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { syncArtistEvents, chunk } from '../lib/events';
+
+// Only the columns the feed actually renders. `*, artist:artists(*)` repeated
+// every artist's full row on every one of its events — about 1 KB per event,
+// which is a lot of JSON to pull and parse on a phone before the feed appears.
+const EVENT_SELECT =
+  'id,artist_id,title,venue_name,venue_city,venue_state,venue_country,venue_lat,venue_lng,event_date,ticket_url,artist:artists(id,name,image_url,thumb_url,genres)' as const;
+
+/** How long to go between full Ticketmaster sweeps on app open. */
+const EVENT_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 import { Event, Artist, HomeCity, distanceMiles } from '../types';
 
 type EventRow = Event & { artist: Artist };
@@ -79,7 +89,7 @@ export function useEvents(
     for (const group of chunk(artistIds)) {
       const { data, error } = await supabase
         .from('events')
-        .select('*, artist:artists(*)')
+        .select(EVENT_SELECT)
         .in('artist_id', group)
         .gte('event_date', nowIso)
         .order('event_date', { ascending: true });
@@ -88,7 +98,10 @@ export function useEvents(
         failed = true;
         continue;
       }
-      collected.push(...((data ?? []) as EventRow[]));
+      // Cast through unknown: without generated DB types PostgREST types the
+      // embedded artist as an array, but this is a many-to-one FK embed so at
+      // runtime it's a single object.
+      collected.push(...((data ?? []) as unknown as EventRow[]));
     }
 
     if (!failed || collected.length > 0) {
@@ -124,7 +137,19 @@ export function useEvents(
     // another full Ticketmaster sync.
     if (autoRefreshedFor.current === userId) return;
     autoRefreshedFor.current = userId;
-    refreshEvents();
+
+    (async () => {
+      // This sweep is up to 60 Ticketmaster lookups. It was running on every
+      // single app open, which is most of why startup dragged — so it's now
+      // throttled the same way the Spotify and Last.fm syncs are. The cached
+      // rows still load immediately via the fetchEvents effect above, and
+      // pull-to-refresh still forces a fresh sweep.
+      const key = `encore:lastSyncEvents:${userId}`;
+      const last = await AsyncStorage.getItem(key);
+      if (last && Date.now() - parseInt(last, 10) < EVENT_SYNC_INTERVAL_MS) return;
+      await refreshEvents();
+      await AsyncStorage.setItem(key, String(Date.now()));
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, artistKey]);
 

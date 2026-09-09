@@ -11,6 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../src/hooks/useAuth';
 import { useArtists } from '../../src/hooks/useArtists';
 import { useEvents } from '../../src/hooks/useEvents';
+import { router } from 'expo-router';
 import { EventCard } from '../../src/components/EventCard';
 import { syncEventReminders } from '../../src/lib/notifications';
 import { Event, Artist } from '../../src/types';
@@ -106,7 +107,16 @@ export default function FeedScreen() {
       <FlatList
         data={filtered}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <EventCard event={item} />}
+        renderItem={({ item }) => (
+          <EventCard
+            event={item}
+            onArtistPress={
+              item.artist_id
+                ? () => router.push({ pathname: '/artist/[id]', params: { id: item.artist_id } })
+                : undefined
+            }
+          />
+        )}
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
         refreshControl={

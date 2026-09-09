@@ -83,6 +83,9 @@ export default function ArtistsScreen() {
                   artist={ua.artist}
                   size="md"
                   sourceBadge={ua.source}
+                  onPress={() =>
+                    router.push({ pathname: '/artist/[id]', params: { id: ua.artist_id } })
+                  }
                   onRemove={() => handleRemove(ua.artist_id, ua.artist.name)}
                 />
               </View>

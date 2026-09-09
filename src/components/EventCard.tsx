@@ -12,6 +12,8 @@ import { Event, Artist } from '../types';
 interface EventCardProps {
   event: Event & { artist?: Artist };
   artistImageUrl?: string;
+  /** Opens the artist's profile. Omit to leave the artist non-tappable. */
+  onArtistPress?: () => void;
 }
 
 const COLORS = {
@@ -36,7 +38,7 @@ function formatEventDate(dateString: string): string {
   return `${day} ${month} ${dateNum} · ${hour12}:${minutes} ${ampm}`;
 }
 
-export function EventCard({ event, artistImageUrl }: EventCardProps) {
+export function EventCard({ event, artistImageUrl, onArtistPress }: EventCardProps) {
   const artist = event.artist;
   const imageUrl = artistImageUrl ?? artist?.image_url ?? null;
 
@@ -53,17 +55,28 @@ export function EventCard({ event, artistImageUrl }: EventCardProps) {
   return (
     <View style={styles.card}>
       <View style={styles.row}>
-        {imageUrl ? (
-          <Image source={{ uri: imageUrl }} style={styles.image} />
-        ) : (
-          <View style={[styles.image, styles.imagePlaceholder]}>
-            <Text style={styles.placeholderText}>
-              {(artist?.name ?? '?').charAt(0).toUpperCase()}
-            </Text>
-          </View>
-        )}
+        <TouchableOpacity
+          onPress={onArtistPress}
+          disabled={!onArtistPress}
+          activeOpacity={0.7}
+        >
+          {imageUrl ? (
+            <Image source={{ uri: imageUrl }} style={styles.image} />
+          ) : (
+            <View style={[styles.image, styles.imagePlaceholder]}>
+              <Text style={styles.placeholderText}>
+                {(artist?.name ?? '?').charAt(0).toUpperCase()}
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
 
-        <View style={styles.info}>
+        <TouchableOpacity
+          style={styles.info}
+          onPress={onArtistPress}
+          disabled={!onArtistPress}
+          activeOpacity={0.7}
+        >
           {artist?.name && (
             <Text style={styles.artistName} numberOfLines={1}>
               {artist.name}
@@ -80,7 +93,7 @@ export function EventCard({ event, artistImageUrl }: EventCardProps) {
             </Text>
           )}
           <Text style={styles.date}>{formatEventDate(event.event_date)}</Text>
-        </View>
+        </TouchableOpacity>
 
         {event.ticket_url && (
           <TouchableOpacity style={styles.ticketButton} onPress={handleTickets}>

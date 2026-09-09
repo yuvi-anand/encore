@@ -7,9 +7,11 @@ import {
   Image,
   TouchableOpacity,
   RefreshControl,
-  Linking,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { router } from 'expo-router';
+import { Feather } from '@expo/vector-icons';
 import { useAuth } from '../../src/hooks/useAuth';
 import { useArtists } from '../../src/hooks/useArtists';
 import { supabase } from '../../src/lib/supabase';
@@ -55,6 +57,7 @@ export default function TouringScreen() {
   const [events, setEvents] = useState<(Event & { artist: Artist })[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [query, setQuery] = useState('');
 
   const fetchEvents = useCallback(async () => {
     if (artistIds.length === 0) {
@@ -154,6 +157,20 @@ export default function TouringScreen() {
     });
   }, [events, homeCities, radius]);
 
+  // Search filters what's already on this screen rather than hitting the API —
+  // matching on the artist and on the city, since "who's playing Boston?" is
+  // the other way people look for a show.
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(
+      (r) =>
+        r.artist.name.toLowerCase().includes(q) ||
+        (r.nearestCity ?? '').toLowerCase().includes(q) ||
+        (r.nearestState ?? '').toLowerCase().includes(q)
+    );
+  }, [rows, query]);
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
@@ -161,14 +178,33 @@ export default function TouringScreen() {
         {rows.length > 0 && <Text style={styles.count}>{rows.length}</Text>}
       </View>
 
+      {rows.length > 0 ? (
+        <View style={styles.searchWrap}>
+          <Feather name="search" size={16} color={COLORS.muted} />
+          <TextInput
+            style={styles.searchInput}
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search touring artists or cities"
+            placeholderTextColor={COLORS.muted}
+            autoCorrect={false}
+            autoCapitalize="none"
+            returnKeyType="search"
+            clearButtonMode="while-editing"
+          />
+        </View>
+      ) : null}
+
       <FlatList
-        data={rows}
+        data={visible}
         keyExtractor={(item) => item.artist.id}
         renderItem={({ item }) => (
           <TouchableOpacity
             style={styles.card}
-            activeOpacity={item.ticketUrl ? 0.8 : 1}
-            onPress={() => item.ticketUrl && Linking.openURL(item.ticketUrl)}
+            activeOpacity={0.8}
+            onPress={() =>
+              router.push({ pathname: '/artist/[id]', params: { id: item.artist.id } })
+            }
           >
             {item.artist.image_url ? (
               <Image source={{ uri: item.artist.image_url }} style={styles.avatar} />
@@ -198,6 +234,7 @@ export default function TouringScreen() {
                 <Text style={styles.dates}>{item.eventCount} dates</Text>
               )}
             </View>
+            <Feather name="chevron-right" size={18} color={COLORS.muted} />
           </TouchableOpacity>
         )}
         contentContainerStyle={styles.list}
@@ -205,8 +242,16 @@ export default function TouringScreen() {
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#6C63FF" />
         }
+        keyboardShouldPersistTaps="handled"
         ListEmptyComponent={
-          loading ? null : (
+          loading ? null : query.trim() ? (
+            <View style={styles.empty}>
+              <Text style={styles.emptyTitle}>No matches</Text>
+              <Text style={styles.emptySubtitle}>
+                No touring artist or city matches “{query.trim()}”.
+              </Text>
+            </View>
+          ) : (
             <View style={styles.empty}>
               <Text style={styles.emptyTitle}>No tours found</Text>
               <Text style={styles.emptySubtitle}>
@@ -232,6 +277,24 @@ const styles = StyleSheet.create({
   },
   title: { color: COLORS.text, fontSize: 28, fontFamily: 'Inter_700Bold', flex: 1 },
   count: { color: COLORS.muted, fontSize: 18, fontFamily: 'Inter_400Regular' },
+  searchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    paddingHorizontal: 12,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: COLORS.card,
+  },
+  searchInput: {
+    flex: 1,
+    color: COLORS.text,
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    padding: 0,
+  },
   list: { paddingHorizontal: 16, paddingBottom: 24 },
   card: {
     flexDirection: 'row',

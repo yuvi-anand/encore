@@ -88,6 +88,7 @@ export default function RootLayout() {
               <Stack.Screen name="(tabs)" />
               <Stack.Screen name="account" options={{ presentation: 'card' }} />
               <Stack.Screen name="settings" options={{ presentation: 'card' }} />
+              <Stack.Screen name="artist/[id]" options={{ presentation: 'card' }} />
             </Stack>
           </AuthGate>
         </ArtistsProvider>

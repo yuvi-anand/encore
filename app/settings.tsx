@@ -85,7 +85,11 @@ export default function SettingsScreen() {
       setUsername(profile?.username ?? '');
       return;
     }
-    await updateProfile({ username: trimmed });
+    const error = await updateProfile({ username: trimmed });
+    if (error) {
+      setUsername(profile?.username ?? '');
+      Alert.alert("Couldn't save your username", error);
+    }
   };
 
   const saveFullName = async () => {
@@ -95,7 +99,11 @@ export default function SettingsScreen() {
       setFullName(profile?.full_name ?? '');
       return;
     }
-    await updateProfile({ full_name: trimmed });
+    const error = await updateProfile({ full_name: trimmed });
+    if (error) {
+      setFullName(profile?.full_name ?? '');
+      Alert.alert("Couldn't save your name", error);
+    }
   };
 
   const homeCities: HomeCity[] = profile?.home_cities ?? [];
@@ -431,7 +439,9 @@ export default function SettingsScreen() {
             right={
               <Switch
                 value={notifyAnnouncements}
-                onValueChange={(v) => updateProfile({ notify_announcements: v })}
+                onValueChange={(v) => {
+                  updateProfile({ notify_announcements: v });
+                }}
                 trackColor={{ false: '#333', true: COLORS.accent }}
                 thumbColor="#fff"
               />
@@ -443,7 +453,9 @@ export default function SettingsScreen() {
             right={
               <Switch
                 value={notifyWeek}
-                onValueChange={(v) => updateProfile({ notify_week_before: v })}
+                onValueChange={(v) => {
+                  updateProfile({ notify_week_before: v });
+                }}
                 trackColor={{ false: '#333', true: COLORS.accent }}
                 thumbColor="#fff"
               />
@@ -455,7 +467,9 @@ export default function SettingsScreen() {
             right={
               <Switch
                 value={notifyDay}
-                onValueChange={(v) => updateProfile({ notify_day_before: v })}
+                onValueChange={(v) => {
+                  updateProfile({ notify_day_before: v });
+                }}
                 trackColor={{ false: '#333', true: COLORS.accent }}
                 thumbColor="#fff"
               />

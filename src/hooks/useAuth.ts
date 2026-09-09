@@ -17,7 +17,8 @@ interface AuthContextValue {
   signInWithLastfm: () => Promise<{ message: string } | null>;
   signOut: () => Promise<void>;
   deleteAccount: () => Promise<{ message: string } | null>;
-  updateProfile: (updates: Partial<Profile>) => Promise<void>;
+  /** Resolves to an error message when the write failed, or null on success. */
+  updateProfile: (updates: Partial<Profile>) => Promise<string | null>;
   refetchProfile: () => void;
 }
 
@@ -209,19 +210,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const updateProfile = useCallback(
-    async (updates: Partial<Profile>) => {
-      if (!user) return;
+    async (updates: Partial<Profile>): Promise<string | null> => {
+      if (!user) return 'Not signed in.';
       const { data, error } = await supabase
         .from('profiles')
         .update(updates)
         .eq('id', user.id)
         .select()
         .single();
-      if (!error && data) {
-        setProfile(data as Profile);
-      } else if (error) {
+      if (error) {
+        // Swallowing this used to hide schema problems completely: onboarding
+        // "saved", bounced back off the auth gate, and looped forever.
         console.error('updateProfile error:', error);
+        return error.message;
       }
+      if (data) setProfile(data as Profile);
+      return null;
     },
     [user]
   );

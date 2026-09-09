@@ -137,11 +137,19 @@ export default function OnboardingScreen() {
   const handleFinish = async () => {
     setSaving(true);
     try {
-      await updateProfile({
+      const saveError = await updateProfile({
         full_name: fullName.trim(),
         username: username.trim(),
         ...(homeCities.length > 0 && { home_cities: homeCities }),
       });
+
+      // The auth gate sends anyone with an incomplete profile straight back
+      // here, so navigating on a failed save would loop silently forever.
+      if (saveError) {
+        setSaving(false);
+        Alert.alert("Couldn't save your profile", saveError);
+        return;
+      }
 
       // Import selected artists in one batch.
       const selectedArtists = topArtists.filter((a, i) =>

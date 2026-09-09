@@ -7,9 +7,6 @@ WebBrowser.maybeCompleteAuthSession();
 const CLIENT_ID = process.env.EXPO_PUBLIC_SPOTIFY_CLIENT_ID!;
 const REDIRECT_URI = AuthSession.makeRedirectUri({ scheme: 'encore', path: 'auth/spotify' });
 
-// Log the exact redirect URI so it can be registered in the Spotify dashboard.
-console.log('[Spotify] Redirect URI to register:', REDIRECT_URI);
-
 const discovery = {
   authorizationEndpoint: 'https://accounts.spotify.com/authorize',
   tokenEndpoint: 'https://accounts.spotify.com/api/token',
@@ -164,6 +161,31 @@ async function spotifyGet(url: string, token: string): Promise<any | null> {
     lastSpotifyStatus = `err ${e?.message ?? e}`;
     return null;
   }
+}
+
+// Spotify rejects `limit` above 10 on /search for this app (400 "Invalid
+// limit"), which used to make bigger searches return nothing at all. Every
+// search pages at 10 instead of asking for more in one shot.
+const SEARCH_PAGE = 10;
+
+/** Pages an artist search until `want` results, or Spotify runs out. */
+async function searchArtistItems(
+  q: string,
+  token: string,
+  want: number
+): Promise<SpotifyArtistItem[]> {
+  const items: SpotifyArtistItem[] = [];
+  for (let offset = 0; items.length < want; offset += SEARCH_PAGE) {
+    const data = await spotifyGet(
+      `https://api.spotify.com/v1/search?q=${encodeURIComponent(q)}` +
+        `&type=artist&limit=${SEARCH_PAGE}&offset=${offset}`,
+      token
+    );
+    const page: SpotifyArtistItem[] = data?.artists?.items ?? [];
+    items.push(...page);
+    if (page.length < SEARCH_PAGE) break; // no more pages
+  }
+  return items.slice(0, want);
 }
 
 /** Simplified {id,name} artist refs from the user's Liked Songs. */
@@ -358,23 +380,11 @@ export async function searchArtistsByGenre(
   genreTerm: string
 ): Promise<Partial<Artist>[]> {
   const q = genreTerm.includes(' ') ? `genre:"${genreTerm}"` : `genre:${genreTerm}`;
-  let data: any = await spotifyGet(
-    `https://api.spotify.com/v1/search?q=${encodeURIComponent(q)}&type=artist&limit=25`,
-    token
-  );
-  let items: SpotifyArtistItem[] = data?.artists?.items ?? [];
-  const genreCount = items.length;
-  let fallbackCount = -1;
+  let items = await searchArtistItems(q, token, 25);
   if (items.length === 0) {
     // Fallback: plain keyword search if the genre filter returns nothing.
-    data = await spotifyGet(
-      `https://api.spotify.com/v1/search?q=${encodeURIComponent(genreTerm)}&type=artist&limit=25`,
-      token
-    );
-    items = data?.artists?.items ?? [];
-    fallbackCount = items.length;
+    items = await searchArtistItems(genreTerm, token, 25);
   }
-  console.log(`[GenreSearch] ${genreTerm} genre:${genreCount} fallback:${fallbackCount} status:${lastSpotifyStatus || 'ok'}`);
   return items.map(normalizeSpotifyArtist);
 }
 
@@ -466,16 +476,6 @@ export async function getFollowedArtists(token: string): Promise<Partial<Artist>
 }
 
 export async function searchArtists(query: string, token: string): Promise<Partial<Artist>[]> {
-  try {
-    const res = await fetch(
-      `https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=artist&limit=20`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    if (!res.ok) throw new Error(`Spotify search error: ${res.status}`);
-    const data = await res.json();
-    return (data.artists.items as SpotifyArtistItem[]).map(normalizeSpotifyArtist);
-  } catch (error) {
-    console.error('searchArtists error:', error);
-    return [];
-  }
+  const items = await searchArtistItems(query, token, 20);
+  return items.map(normalizeSpotifyArtist);
 }

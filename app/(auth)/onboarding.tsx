@@ -48,7 +48,7 @@ export default function OnboardingScreen() {
   const [username, setUsername] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const { updateProfile } = useAuth();
+  const { profile, updateProfile } = useAuth();
   const { importArtists } = useArtists();
   const { request, response, promptAsync } = useSpotifyAuth();
 
@@ -108,6 +108,22 @@ export default function OnboardingScreen() {
     setConnectedSource('lastfm');
     setLastfmConnecting(false);
   };
+
+  // Signing up with the login screen's Last.fm button links the account before
+  // onboarding even mounts, so without this the connect step asked for Last.fm
+  // a second time and the artist step came up empty.
+  const seededRef = useRef<string | null>(null);
+  React.useEffect(() => {
+    const linked = profile?.lastfm_username;
+    if (!linked || connectedSource || seededRef.current === linked) return;
+    seededRef.current = linked;
+    setConnectedSource('lastfm');
+    (async () => {
+      const artists = await getLastfmTopArtists(linked);
+      setTopArtists(artists);
+      setSelectedArtistIds(new Set(artists.map((a, i) => a.spotify_id ?? String(i))));
+    })();
+  }, [profile?.lastfm_username, connectedSource]);
 
   const toggleArtist = (key: string) => {
     setSelectedArtistIds((prev) => {

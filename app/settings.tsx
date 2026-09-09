@@ -19,7 +19,7 @@ import { useArtists } from '../src/hooks/useArtists';
 import { CityChip } from '../src/components/CityChip';
 import { useSpotifyAuth, exchangeSpotifyCode, lastSpotifyError } from '../src/lib/spotify';
 import { authenticateLastfm } from '../src/lib/lastfm';
-import { geocodeCity } from '../src/lib/geocode';
+import { geocodeCity, isUnlocated } from '../src/lib/geocode';
 import { sendTestNotification, sendLocalNotification } from '../src/lib/notifications';
 import { HomeCity } from '../src/types';
 
@@ -112,7 +112,7 @@ export default function SettingsScreen() {
   const notifyWeek = profile?.notify_week_before ?? true;
   const notifyDay = profile?.notify_day_before ?? true;
 
-  const [addingCity, setAddingCity] = useState(false);
+  const [resolvingCity, setResolvingCity] = useState<string | null>(null);
 
   const addCity = async () => {
     const trimmed = cityInput.trim();
@@ -121,11 +121,24 @@ export default function SettingsScreen() {
       Alert.alert('Limit reached', 'You can add up to 3 home cities.');
       return;
     }
-    setAddingCity(true);
     setCityInput('');
-    const newCity = await geocodeCity(trimmed);
-    await updateProfile({ home_cities: [...homeCities, newCity] });
-    setAddingCity(false);
+    // Show the chip straight away: geocoding plus the profile write is two
+    // round trips, and until they finish nothing appeared on screen at all.
+    setResolvingCity(trimmed);
+    try {
+      const newCity = await geocodeCity(trimmed);
+      const error = await updateProfile({ home_cities: [...homeCities, newCity] });
+      if (error) {
+        Alert.alert("Couldn't save that city", error);
+      } else if (isUnlocated(newCity)) {
+        Alert.alert(
+          "Couldn't locate that city",
+          `We saved “${newCity.city}”, but couldn't find its coordinates — shows near it won't be matched by distance. Try a nearby larger city.`
+        );
+      }
+    } finally {
+      setResolvingCity(null);
+    }
   };
 
   const removeCity = (index: number) => {
@@ -333,6 +346,15 @@ export default function SettingsScreen() {
               <CityChip city={city} onRemove={() => removeCity(i)} />
             </View>
           ))}
+          {resolvingCity ? (
+            <View style={styles.cityRow}>
+              <CityChip
+                city={{ city: resolvingCity, state: '', country: '', lat: 0, lng: 0 }}
+                onRemove={() => {}}
+                pending
+              />
+            </View>
+          ) : null}
           {homeCities.length < 3 && (
             <View style={styles.addCityRow}>
               <TextInput
@@ -344,8 +366,12 @@ export default function SettingsScreen() {
                 returnKeyType="done"
                 onSubmitEditing={addCity}
               />
-              <TouchableOpacity style={styles.addCityBtn} onPress={addCity} disabled={addingCity}>
-                {addingCity ? (
+              <TouchableOpacity
+                style={styles.addCityBtn}
+                onPress={addCity}
+                disabled={!!resolvingCity}
+              >
+                {resolvingCity ? (
                   <ActivityIndicator color="#fff" size="small" />
                 ) : (
                   <Text style={styles.addCityBtnText}>Add</Text>

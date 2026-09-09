@@ -1,10 +1,12 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { HomeCity } from '../types';
 
 interface CityChipProps {
   city: HomeCity;
   onRemove: () => void;
+  /** Still being geocoded — shown immediately so adding a city feels instant. */
+  pending?: boolean;
 }
 
 const COLORS = {
@@ -15,21 +17,25 @@ const COLORS = {
   removeText: '#555',
 };
 
-export function CityChip({ city, onRemove }: CityChipProps) {
+export function CityChip({ city, onRemove, pending }: CityChipProps) {
   const label = city.state
     ? `${city.city}, ${city.state}`
     : city.city;
 
   return (
-    <View style={styles.chip}>
-      <Text style={styles.label}>{label}</Text>
-      <TouchableOpacity
-        onPress={onRemove}
-        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        style={styles.removeButton}
-      >
-        <Text style={styles.removeText}>x</Text>
-      </TouchableOpacity>
+    <View style={[styles.chip, pending && styles.chipPending]}>
+      <Text style={[styles.label, pending && styles.labelPending]}>{label}</Text>
+      {pending ? (
+        <ActivityIndicator size="small" color={COLORS.muted} />
+      ) : (
+        <TouchableOpacity
+          onPress={onRemove}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          style={styles.removeButton}
+        >
+          <Text style={styles.removeText}>x</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -47,6 +53,8 @@ const styles = StyleSheet.create({
     gap: 6,
     alignSelf: 'flex-start',
   },
+  chipPending: { borderStyle: 'dashed', borderColor: '#3a3a3a' },
+  labelPending: { color: COLORS.muted },
   label: {
     color: COLORS.text,
     fontSize: 13,

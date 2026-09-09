@@ -19,7 +19,7 @@ import { authenticateLastfm, getLastfmTopArtists } from '../../src/lib/lastfm';
 import { ArtistSource } from '../../src/types';
 import { ArtistCard } from '../../src/components/ArtistCard';
 import { CityChip } from '../../src/components/CityChip';
-import { geocodeCity } from '../../src/lib/geocode';
+import { geocodeCity, isUnlocated } from '../../src/lib/geocode';
 import { Artist, HomeCity } from '../../src/types';
 
 const COLORS = {
@@ -34,6 +34,20 @@ const COLORS = {
 
 const TOTAL_STEPS = 4;
 
+/** How many of the imported artists the confirmation step renders. */
+const ARTIST_PREVIEW_LIMIT = 60;
+
+/**
+ * Identity for the selection set. This has to be derived the SAME way
+ * everywhere: the selection was being built from the flat index while the
+ * cards were keyed by row/column, so for Last.fm imports (no spotify_id, since
+ * Last.fm returns names only) nothing matched — every artist rendered as
+ * unselected and "tap to deselect" couldn't actually deselect anything.
+ */
+function artistKey(a: Partial<Artist>, index: number): string {
+  return a.spotify_id ?? a.name?.trim().toLowerCase() ?? String(index);
+}
+
 export default function OnboardingScreen() {
   const [step, setStep] = useState(0);
   const [spotifyToken, setSpotifyToken] = useState<string | null>(null);
@@ -44,6 +58,10 @@ export default function OnboardingScreen() {
   const [selectedArtistIds, setSelectedArtistIds] = useState<Set<string>>(new Set());
   const [cityInput, setCityInput] = useState('');
   const [homeCities, setHomeCities] = useState<HomeCity[]>([]);
+  // Names still being geocoded. Rendered as chips right away — the lookup is a
+  // network round trip, and clearing the input with nothing appearing in its
+  // place made adding a city look like it had failed.
+  const [resolvingCities, setResolvingCities] = useState<string[]>([]);
   const [fullName, setFullName] = useState('');
   const [username, setUsername] = useState('');
   const [saving, setSaving] = useState(false);
@@ -67,7 +85,7 @@ export default function OnboardingScreen() {
             });
             getLibraryArtists(tokens.accessToken).then((artists) => {
               setTopArtists(artists);
-              const ids = new Set(artists.map((a, i) => a.spotify_id ?? String(i)));
+              const ids = new Set(artists.map(artistKey));
               setSelectedArtistIds(ids);
               setConnectedSource('spotify');
               setSpotifyConnecting(false);
@@ -104,7 +122,7 @@ export default function OnboardingScreen() {
     await updateProfile({ lastfm_username: lastfmUser });
     const artists = await getLastfmTopArtists(lastfmUser);
     setTopArtists(artists);
-    setSelectedArtistIds(new Set(artists.map((a, i) => a.spotify_id ?? String(i))));
+    setSelectedArtistIds(new Set(artists.map(artistKey)));
     setConnectedSource('lastfm');
     setLastfmConnecting(false);
   };
@@ -121,7 +139,7 @@ export default function OnboardingScreen() {
     (async () => {
       const artists = await getLastfmTopArtists(linked);
       setTopArtists(artists);
-      setSelectedArtistIds(new Set(artists.map((a, i) => a.spotify_id ?? String(i))));
+      setSelectedArtistIds(new Set(artists.map(artistKey)));
     })();
   }, [profile?.lastfm_username, connectedSource]);
 
@@ -137,13 +155,26 @@ export default function OnboardingScreen() {
   const addCity = async () => {
     const trimmed = cityInput.trim();
     if (!trimmed) return;
-    if (homeCities.length >= 3) {
+    if (homeCities.length + resolvingCities.length >= 3) {
       Alert.alert('Limit reached', 'You can add up to 3 home cities.');
       return;
     }
     setCityInput('');
-    const city = await geocodeCity(trimmed);
-    setHomeCities((prev) => [...prev, city]);
+    setResolvingCities((prev) => [...prev, trimmed]);
+    try {
+      const city = await geocodeCity(trimmed);
+      setHomeCities((prev) => [...prev, city]);
+      if (isUnlocated(city)) {
+        // A city with no coordinates silently drops out of every distance
+        // filter, so say so rather than letting the feed look empty later.
+        Alert.alert(
+          "Couldn't locate that city",
+          `We saved “${city.city}”, but couldn't find its coordinates — shows near it won't be matched by distance. Try a nearby larger city.`
+        );
+      }
+    } finally {
+      setResolvingCities((prev) => prev.filter((c) => c !== trimmed));
+    }
   };
 
   const removeCity = (index: number) => {
@@ -169,7 +200,7 @@ export default function OnboardingScreen() {
 
       // Import selected artists in one batch.
       const selectedArtists = topArtists.filter((a, i) =>
-        selectedArtistIds.has(a.spotify_id ?? String(i))
+        selectedArtistIds.has(artistKey(a, i))
       );
       if (selectedArtists.length > 0) {
         await importArtists(selectedArtists, connectedSource ?? 'manual');
@@ -203,6 +234,7 @@ export default function OnboardingScreen() {
       onChangeInput={setCityInput}
       onAdd={addCity}
       cities={homeCities}
+      resolving={resolvingCities}
       onRemove={removeCity}
     />,
     <StepArtists
@@ -408,12 +440,14 @@ function StepCity({
   onChangeInput,
   onAdd,
   cities,
+  resolving,
   onRemove,
 }: {
   input: string;
   onChangeInput: (v: string) => void;
   onAdd: () => void;
   cities: HomeCity[];
+  resolving: string[];
   onRemove: (i: number) => void;
 }) {
   return (
@@ -437,9 +471,17 @@ function StepCity({
         {cities.map((city, i) => (
           <CityChip key={i} city={city} onRemove={() => onRemove(i)} />
         ))}
+        {resolving.map((name) => (
+          <CityChip
+            key={`pending-${name}`}
+            city={{ city: name, state: '', country: '', lat: 0, lng: 0 }}
+            onRemove={() => {}}
+            pending
+          />
+        ))}
       </View>
 
-      {cities.length === 0 && (
+      {cities.length === 0 && resolving.length === 0 && (
         <Text style={stepStyles.skipNote}>Add up to 3 cities to track nearby shows.</Text>
       )}
     </View>
@@ -469,20 +511,26 @@ function StepArtists({
     );
   }
 
+  // Rendering all of them meant up to 500 cards, each with a remote image, in
+  // a plain ScrollView. Everything still gets imported — this only caps what
+  // the confirmation step draws.
+  const shown = artists.slice(0, ARTIST_PREVIEW_LIMIT);
   const rows: Partial<Artist>[][] = [];
-  for (let i = 0; i < artists.length; i += 2) {
-    rows.push(artists.slice(i, i + 2));
+  for (let i = 0; i < shown.length; i += 2) {
+    rows.push(shown.slice(i, i + 2));
   }
 
   return (
     <View style={stepStyles.container}>
       <Text style={stepStyles.artistsNote}>
-        Tap an artist to deselect. Selected artists will be added to your list.
+        {artists.length > shown.length
+          ? `Importing all ${artists.length} artists we found — your top ${shown.length} are below. Tap one to leave it out.`
+          : 'Tap an artist to deselect. Selected artists will be added to your list.'}
       </Text>
       {rows.map((row, ri) => (
         <View key={ri} style={stepStyles.artistRow}>
           {row.map((a, ci) => {
-            const key = a.spotify_id ?? `${ri}-${ci}`;
+            const key = artistKey(a, ri * 2 + ci);
             const isSelected = selected.has(key);
             return (
               <View key={key} style={{ flex: 1 }}>
